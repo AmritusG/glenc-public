@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  GlEnc app icon — placeholder v0.0.1.
+
+  Mirrors Glance's icon visual language:
+    - 2000x2000 canvas
+    - Black background (#000000) with corner radius 440 (≈ 22% of side)
+    - White character (#ffffff) inset with ~12% padding (88% inner scale)
+
+  Glance uses 看 (kàn — "to see"); GlEnc uses 编 (biān — "to weave / compile / edit").
+  This placeholder uses a system serif <text> element rather than the
+  hand-traced vector paths Glance has. iconutil derivation to .icns can
+  happen in a later session; the visual language is locked in.
+
+  Future iteration: trace 编 by hand to match Glance's stroke style, or
+  swap to a different palette (white-on-black is the agreed starting
+  point per HANDOVER §11.3).
+-->
+<svg width="100%" height="100%" viewBox="0 0 2000 2000"
+     version="1.1" xmlns="http://www.w3.org/2000/svg">
+    <rect x="0" y="0" width="2000" height="2000" fill="#000000" rx="440" ry="440"/>
+    <text x="1000" y="1000"
+          font-family="PingFang SC, Songti SC, STSong, serif"
+          font-size="1500"
+          font-weight="500"
+          fill="#ffffff"
+          text-anchor="middle"
+          dominant-baseline="central">编</text>
+</svg>

@@ -1,0 +1,2 @@
+reference/**/*.mov filter=lfs diff=lfs merge=lfs -text
+reference/**/*.png filter=lfs diff=lfs merge=lfs -text

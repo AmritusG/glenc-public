@@ -1,0 +1,13 @@
+.build/
+.swiftpm/
+*.app
+*.dmg
+*.zip
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+.DS_Store
+/tmp/
+*.log
+.claude/
+**/.*.crate-meta.json

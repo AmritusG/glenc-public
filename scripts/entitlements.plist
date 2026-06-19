@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Phase 0 entitlements. App-sandbox is OFF: encoding source video to
+	  arbitrary destinations needs unrestricted filesystem access. Phase 8
+	  may revisit if distribution-via-Mac-App-Store ever becomes a goal,
+	  but Direct/Developer-ID distribution doesn't require sandboxing.
+
+	  No JIT, no unsigned-executable-memory, no library-validation override:
+	  GlEnc is pure Swift + AVFoundation, no embedded MPV/FFmpeg JIT path
+	  like Glance has.
+
+	  user-selected.read-only is set so Open... panels (if added later)
+	  work cleanly even though we're unsandboxed; harmless when sandbox
+	  is off and useful if sandboxing flips on later.
+	-->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+	<key>com.apple.security.files.user-selected.read-only</key>
+	<true/>
+</dict>
+</plist>

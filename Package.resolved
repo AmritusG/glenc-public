@@ -1,0 +1,23 @@
+{
+  "pins" : [
+    {
+      "identity" : "swift-snappy",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/AmritusG/swift-snappy.git",
+      "state" : {
+        "revision" : "5c5518b79355935156e5c0b3fa11e85c565c1392",
+        "version" : "1.0.1"
+      }
+    },
+    {
+      "identity" : "swift-system",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-system",
+      "state" : {
+        "revision" : "7c6ad0fc39d0763e0b699210e4124afd5041c5df",
+        "version" : "1.6.4"
+      }
+    }
+  ],
+  "version" : 2
+}
