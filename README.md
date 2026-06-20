@@ -7,6 +7,10 @@ GUI, per-job trim/crop/resize/rename, live preview, and audio pass-through.
 
 Version **1.1.0**. Requires **macOS 14 (Sonoma) or later**.
 
+## Download
+
+Prefer a ready-to-run app over building from source? Download the signed, notarized macOS DMG from [glenc-releases](https://github.com/AmritusG/glenc-releases).
+
 ## Formats
 
 | Family | Variants | Notes |
