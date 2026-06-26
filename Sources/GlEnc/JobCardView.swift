@@ -253,8 +253,7 @@ struct JobCardView: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
+                        .rowChevronStyle()
                     Text(codecFamilyLabel)
                 }
             }
@@ -273,8 +272,7 @@ struct JobCardView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
+                            .rowChevronStyle()
                         Text(variant.label)
                     }
                 }
@@ -291,8 +289,7 @@ struct JobCardView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
+                            .rowChevronStyle()
                         Text(job.outputContainer.label)
                     }
                 }
@@ -310,8 +307,7 @@ struct JobCardView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
+                            .rowChevronStyle()
                         Text(job.format.alphaMode.label)
                     }
                 }
@@ -330,8 +326,7 @@ struct JobCardView: View {
                 Button { showingAdvanced = true } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
+                            .rowChevronStyle()
                         Text("Advanced")
                     }
                 }
@@ -354,6 +349,55 @@ struct JobCardView: View {
                 .font(.caption)
                 .foregroundColor(.orange)
                 .help("This ProRes variant has no alpha channel. Choose ProRes 4444 to keep the source's transparency.")
+            }
+
+            // ── HAP chunks stepper (Slice 4) — advanced knob, last in the
+            //    row (debug-params-last). HAP family only: chunked sections
+            //    are a HAP-only feature, so DXV3 (DXT1/DXT5/YCG6/YG10) never
+            //    shows it. 1 = single section (byte-identical to pre-Slice-4).
+            if case .dxv = job.outputCodec, job.format.family == .hap {
+                // Custom 1–64 tap-stepper. Draws the SAME combined
+                // `chevron.up.chevron.down` glyph at the SAME `rowChevronStyle()`
+                // (9pt — unchanged; the difference vs the codec chevron was
+                // never glyph size, it was the menu's control BOX).
+                //
+                // To inherit that box by construction rather than faking it
+                // with a tuned frame/font, the chevron is the label of a
+                // borderless `Button` — the same borderless-control context
+                // (controlSize `.regular`) the codec `Menu`
+                // (`.menuStyle(.borderlessButton)`) renders in. The Button is
+                // `.allowsHitTesting(false)`, so it contributes ONLY layout
+                // (the box) and can never swallow the tap; the two
+                // `onTapGesture` zones live in an `.overlay` added afterwards,
+                // so they stay hit-testable and drive +1 / -1. `hapChunksBinding`
+                // clamps 1…64, so +1 at 64 / -1 at 1 no-op safely. The label
+                // Texts carry no font/colour (like the codec menu's label
+                // Text); the number sits in a fixed-width monospaced-digit
+                // slot so the chevron doesn't shift sideways (1 vs 64).
+                HStack(spacing: 4) {
+                    Text("Chunks:")
+                    Text("\(job.hapChunks)")
+                        .monospacedDigit()
+                        .frame(width: 18, alignment: .trailing)
+                    Button(action: {}) {
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 12))
+                            .foregroundColor(.white)
+                    }
+                    .buttonStyle(.borderless)
+                    .allowsHitTesting(false)        // box only — never grabs the tap
+                    .overlay(
+                        VStack(spacing: 0) {
+                            Color.clear.contentShape(Rectangle())
+                                .onTapGesture { hapChunksBinding.wrappedValue = job.hapChunks + 1 }
+                            Color.clear.contentShape(Rectangle())
+                                .onTapGesture { hapChunksBinding.wrappedValue = job.hapChunks - 1 }
+                        }
+                    )
+                }
+                .fixedSize()
+                .disabled(!isMutable)
+                .help("HAP chunked-section count (1–64). 1 = single section. Higher splits each frame into more independently-decodable chunks for parallel GPU upload.")
             }
 
             Spacer()
@@ -502,8 +546,7 @@ struct JobCardView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
+                            .rowChevronStyle()
                         Text(job.audioEnabled ? "Audio: On" : "Audio: Off")
                     }
                 }
@@ -527,8 +570,7 @@ struct JobCardView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
+                            .rowChevronStyle()
                         Text(job.audioRate.label)
                     }
                 }
@@ -642,8 +684,7 @@ struct JobCardView: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
+                        .rowChevronStyle()
                     Text("Size: \(outputSizeMenuLabel)")
                 }
             }
@@ -662,8 +703,7 @@ struct JobCardView: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
+                        .rowChevronStyle()
                     Text("Quality: \(job.resizeQuality.displayLabel)")
                 }
             }
@@ -685,8 +725,7 @@ struct JobCardView: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
+                        .rowChevronStyle()
                     Text("Aspect: \(job.aspectMode.displayLabel)")
                 }
             }
@@ -1313,6 +1352,15 @@ struct JobCardView: View {
         )
     }
 
+    /// Slice 4 — per-job HAP chunk count. Clamps to 1...64 on write so
+    /// the value can never leave range (the Stepper's `in:` enforces it
+    /// too; this guards any programmatic set). Does not affect the
+    /// auto-name. Only surfaced for HAP-family formats (see row2Codec).
+    private var hapChunksBinding: Binding<Int> {
+        Binding(get: { job.hapChunks },
+                set: { v in updateJob { $0.hapChunks = min(64, max(1, v)) } })
+    }
+
     /// Resize Release Phase F — writes the row's outputSize.
     /// AutoNameEngine is NOT refreshed here: RESIZE_PLAN.md does not
     /// specify a filename token for resize, so a size change does
@@ -1356,5 +1404,16 @@ struct JobCardView: View {
         queue.jobs[i].progress = 0
         queue.jobs[i].errorMessage = nil
         queue.jobs[i].outputURL = nil
+    }
+}
+
+private extension View {
+    /// The codec row's single chevron-styling source of truth. Every
+    /// dropdown's `chevron.up.chevron.down` and the Chunks stepper's
+    /// `chevron.up`/`chevron.down` apply THIS modifier, so their size,
+    /// weight, and colour are guaranteed identical — change it here and
+    /// the whole row moves together (no per-control magic numbers).
+    func rowChevronStyle() -> some View {
+        self.font(.system(size: 9)).foregroundColor(.secondary)
     }
 }

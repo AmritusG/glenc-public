@@ -29,6 +29,14 @@ struct EncodeJob: Identifiable, Equatable {
     /// in the per-job Advanced popover.
     var videoSettings: VideoEncodeSettings = .default
 
+    /// Slice 4 — HAP chunked-section count (1–64; 1 = single section,
+    /// byte-identical to pre-Slice-4 output). Honoured only when the
+    /// resolved `format` is a HAP variant (`format.family == .hap`);
+    /// DXV3 variants ignore it. Seeded from `AppSettings.defaultHapChunks`
+    /// at job-add and edited per-row via the codec row's Chunks stepper.
+    /// Flows into `EncodeRequest.hapChunks` at encode time.
+    var hapChunks: Int = 1
+
     // MARK: - Audio (Multi-Format Phase 4)
 
     /// Carry source audio into the output (default ON — Alley parity); the
@@ -246,10 +254,15 @@ struct EncodeJob: Identifiable, Equatable {
         aspectMode: AspectMode = .letterbox,
         cropRect: CGRect? = nil,
         audioEnabled: Bool = true,
-        audioRate: AudioRate = .original
+        audioRate: AudioRate = .original,
+        hapChunks: Int = 1
     ) {
         self.audioEnabled = audioEnabled
         self.audioRate = audioRate
+        // Slice 4 — clamp defensively; callers seed from the persisted
+        // default (already clamped) and the stepper enforces 1...64, so
+        // this only guards programmatic construction.
+        self.hapChunks = min(64, max(1, hapChunks))
         self.id = UUID()
         self.sourceURL = sourceURL
         self.format = format

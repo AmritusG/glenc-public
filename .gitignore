@@ -9,5 +9,17 @@ DerivedData/
 .DS_Store
 /tmp/
 *.log
-.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/mint-test-media/
 **/.*.crate-meta.json
+
+# Reproducible chunked-HAP fixtures (mint locally via glenc-cli --chunks)
+/fixtures/chunked/
+
+# Test-generated encode outputs written next to the reference corpus
+# (DxvSourceReEncode/corpus tests emit these into reference/<fmt>/glenc.mov
+# at run time). Never commit — none of the 56 curated reference files are
+# named glenc.mov, so this only catches the generated artifacts.
+reference/**/glenc.mov

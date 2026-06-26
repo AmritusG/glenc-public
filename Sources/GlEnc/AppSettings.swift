@@ -40,6 +40,15 @@ final class AppSettings: ObservableObject {
         didSet { userDefaults.set(defaultAlpha.rawValue, forKey: Keys.defaultAlpha) }
     }
 
+    /// Slice 4 — HAP chunked-section count seeded into newly-created
+    /// jobs (1–64; 1 = single section, byte-identical to pre-Slice-4
+    /// output). Parity with `defaultQuality`/`defaultAlpha`. Only the
+    /// HAP family honours it — DXV3 variants ignore the value. Persisted
+    /// as a plain Int.
+    @Published var defaultHapChunks: Int {
+        didSet { userDefaults.set(defaultHapChunks, forKey: Keys.defaultHapChunks) }
+    }
+
     // MARK: - Resize defaults (v0.9.4-pending Phase C)
 
     /// Per-job resize-filter default applied to newly-created jobs.
@@ -246,6 +255,7 @@ final class AppSettings: ObservableObject {
     private enum Keys {
         static let defaultQuality              = "glenc.defaultQuality"
         static let defaultAlpha                = "glenc.defaultAlpha"
+        static let defaultHapChunks            = "glenc.defaultHapChunks"
         static let defaultResizeQuality        = "glenc.defaultResizeQuality"
         static let defaultOutputSize           = "glenc.defaultOutputSize"
         static let defaultAspectMode           = "glenc.defaultAspectMode"
@@ -273,6 +283,11 @@ final class AppSettings: ObservableObject {
             QualityTier(rawValue: d.string(forKey: Keys.defaultQuality) ?? "") ?? .normal
         self.defaultAlpha =
             AlphaMode(rawValue: d.string(forKey: Keys.defaultAlpha) ?? "") ?? .withoutAlpha
+        // Slice 4 — HAP chunk count. object(forKey:) nil-distinction so a
+        // fresh install reads 1 (integer(forKey:) would return 0). Clamp
+        // to 1...64 defensively against a corrupt/out-of-range stored value.
+        self.defaultHapChunks =
+            min(64, max(1, (d.object(forKey: Keys.defaultHapChunks) as? Int) ?? 1))
         self.defaultResizeQuality =
             ResizeQuality(rawValue: d.string(forKey: Keys.defaultResizeQuality) ?? "") ?? .auto
         // OutputSize is JSON-persisted (associated values). Missing OR
@@ -328,6 +343,7 @@ final class AppSettings: ObservableObject {
     func resetToDefaults() {
         defaultQuality = .normal
         defaultAlpha = .withoutAlpha
+        defaultHapChunks = 1
         defaultResizeQuality = .auto
         defaultOutputSize = .original
         defaultAspectMode = .letterbox

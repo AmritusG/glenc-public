@@ -25,8 +25,15 @@ let package = Package(
     products: [
         .executable(name: "GlEnc", targets: ["GlEnc"]),
         .library(name: "GlEncCore", targets: ["GlEncCore"]),
+        // Headless CLI over GlEncCore — DXV/HAP minting from the command
+        // line, no GUI. Drives the exact `CoreEncoder` dispatch the app uses.
+        .executable(name: "glenc-cli", targets: ["glenc-cli"]),
     ],
     dependencies: [
+        // CLI argument parsing. Apache-2.0 (permissive — safe for Loombda
+        // to link transitively). ONLY the `glenc-cli` executable depends on
+        // it; GlEncCore's dependency graph stays unchanged.
+        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
         // Snappy — HAP de/compression. BSD-3, wraps Google's C snappy-c.
         // The vendored GlanceCore decodes HAP via this same package, and
         // our tests round-trip SnappyCompressor output through it.
@@ -78,6 +85,17 @@ let package = Package(
             ],
             path: "Sources/GlEnc",
             exclude: ["Info.plist"]
+        ),
+        // Thin headless front-end. Parses args, makes ONE call into
+        // GlEncCore's `CoreEncoder`, maps result to an exit code. No encode
+        // logic here — it lives in GlEncCore, shared with the GUI.
+        .executableTarget(
+            name: "glenc-cli",
+            dependencies: [
+                "GlEncCore",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            path: "Sources/glenc-cli"
         ),
         .testTarget(
             name: "GlEncTests",

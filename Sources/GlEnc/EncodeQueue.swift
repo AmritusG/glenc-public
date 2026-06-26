@@ -31,10 +31,10 @@ import GlEncCore
 final class EncodeQueue: ObservableObject {
 
     /// Phase 3 — Motion JPEG ships at a fixed high-quality JPEG target
-    /// (AVVideoQualityKey). MJPEG's only meaningful knob is quality;
-    /// 0.85 is visually strong without bloating size. No per-job UI for
-    /// it this phase (consistent with the other intra/simple codecs).
-    static let mjpegDefaultQuality = 0.85
+    /// (AVVideoQualityKey). The value now lives in `CoreEncoder` (the
+    /// shared dispatch); this alias keeps the historical GUI reference
+    /// pointing at the single source of truth.
+    static let mjpegDefaultQuality = CoreEncoder.mjpegDefaultQuality
 
     // MARK: - Published state
 
@@ -292,6 +292,9 @@ final class EncodeQueue: ObservableObject {
         // Phase 4 — audio defaults for new jobs.
         let audioEnabled = AppSettings.shared.defaultAudioEnabled
         let audioRate = AppSettings.shared.defaultAudioRate
+        // Slice 4 — seed the per-job HAP chunk count from the persisted
+        // default (read directly, mirroring the audio defaults above).
+        let hapChunks = AppSettings.shared.defaultHapChunks
         let firstAddedIdx = jobs.count
         for url in urls {
             let job = EncodeJob(sourceURL: url, format: format,
@@ -299,7 +302,8 @@ final class EncodeQueue: ObservableObject {
                                 resizeQuality: resizeQuality,
                                 aspectMode: aspectMode,
                                 audioEnabled: audioEnabled,
-                                audioRate: audioRate)
+                                audioRate: audioRate,
+                                hapChunks: hapChunks)
             jobs.append(job)
             print("[GlEnc] queued #\(jobs.count - 1): \(url.path) → \(job.format.label)")
             // Multi-Format Phase 1 — probe source alpha asynchronously
@@ -716,203 +720,42 @@ final class EncodeQueue: ObservableObject {
                 }
             }
 
-            // Multi-Format dispatch on the parent codec.
-            //   .dxv  → FrameEncoder + DXVMOVWriter wrapped in DXVEncoderSink
-            //           (+ optional audio trak): byte-identical when no audio.
-            //   .prores/.h264/.hevc/.mjpeg → AVAssetWriterVideoSink (+ audio).
-            let pipeline: EncodePipeline
+            // Multi-format dispatch lives in GlEncCore (CoreEncoder) so the
+            // GUI and glenc-cli share ONE encode path — no duplicated encode
+            // logic (the GlanceCore-inside-glance pattern). Byte-identical to
+            // the pre-extraction inline switch; the 595-test suite is the gate.
+            //
             // Fix-Brief 2 (B) — capture the built sink so we can read its
             // post-run `audioWarning` (an audio-write failure the sink
-            // recorded while keeping the video). SinkFactory is non-Sendable,
-            // so this mutable capture is allowed; the sink is built during
+            // recorded while keeping the video). The sink is built during
             // `pipeline.run()`, read after it returns.
             var builtSink: FrameSink?
-            switch snapshot.outputCodec {
-            case .dxv(let format):
-                let encoder: FrameEncoder
-                let sourceAlphaInfo: CGImageAlphaInfo
-                switch format {
-                case .dxt1:
-                    encoder = DXT1Encoder()
-                    sourceAlphaInfo = .noneSkipLast
-                case .dxt5:
-                    encoder = DXT5Encoder()
-                    sourceAlphaInfo = .last
-                case .ycg6:
-                    encoder = YCG6Encoder()
-                    sourceAlphaInfo = .noneSkipLast
-                case .yg10:
-                    encoder = YG10Encoder()
-                    sourceAlphaInfo = .last
-                case .hap1:
-                    encoder = HapFrameEncoder(codec: .hap1)
-                    sourceAlphaInfo = .noneSkipLast
-                case .hap5:
-                    encoder = HapFrameEncoder(codec: .hap5)
-                    sourceAlphaInfo = .last
-                case .hapY:
-                    encoder = HapFrameEncoder(codec: .hapY)
-                    sourceAlphaInfo = .noneSkipLast
-                case .hapA:
-                    encoder = HapFrameEncoder(codec: .hapA)
-                    sourceAlphaInfo = .last
-                case .hapM:
-                    // v0.9.3 Phase C: HapM (HAP Q + alpha). The
-                    // (.hapQ, .withAlpha) UI resolver now produces this
-                    // variant. Same alpha-info treatment as the other
-                    // HAP+alpha variants — straight alpha through the
-                    // pipeline; HapABlockPacker normalizes inside.
-                    encoder = HapFrameEncoder(codec: .hapM)
-                    sourceAlphaInfo = .last
-                }
-                // Phase 4 — build the sink explicitly (was the convenience
-                // init) so the optional audio trak can be attached. With
-                // audioData == nil this is byte-for-byte the convenience
-                // path: prepare → DXVMOVWriter → DXVEncoderSink, no audio.
-                pipeline = EncodePipeline(
-                    sourceURL: snapshot.sourceURL,
-                    makeSink: { w, h, fps in
-                        try encoder.prepare(width: w, height: h, fps: fps, hasAlpha: false)
-                        let writer = try DXVMOVWriter(
-                            destURL: outURL,
-                            format: format,
-                            presentationWidth: w,
-                            presentationHeight: h,
-                            fps: fps,
-                            // v0.9.2 Phase D.5: bundle-derived writer-version
-                            // string — Finder CMD+I "Encoding software" reads
-                            // this from the udta/©swr metadata atom. AppVersion
-                            // reads CFBundleShortVersionString once, so the
-                            // string can't drift from the real app version.
-                            writerVersion: AppVersion.writerVersion,
-                            codecFourCC: format.streamFourCC
-                        )
-                        let sink = DXVEncoderSink(encoder: encoder, writer: writer, audio: audioData)
-                        builtSink = sink
-                        return sink
-                    },
-                    progress: progressCb,
-                    sourceAlphaInfo: sourceAlphaInfo,
-                    frameRange: pipelineFrameRange,
-                    // Resize Release Phase E — pass the snapshot's per-job
-                    // outputSize + resizeQuality through. `.original` is the
-                    // pipeline's true no-op default (DXV3 byte-identity
-                    // path); non-.original triggers FrameResizer per frame
-                    // and routes post-transform dims to encoder + writer.
-                    outputSize: snapshot.outputSize,
-                    resizeQuality: snapshot.resizeQuality,
-                    // Resize Release Phase G — aspect handling. .letterbox
-                    // (default) fits the source aspect inside the target;
-                    // .distortToFill stretches. Matched aspect or .original
-                    // both bypass letterbox compositing inside FrameResizer.
-                    aspectMode: snapshot.aspectMode,
-                    // Crop Release Phase F.1 — forward the job's cropRect
-                    // to the pipeline so a user-set crop actually takes
-                    // effect at encode time. nil (the default) hits the
-                    // pipeline's byte-identical no-op path.
-                    cropRect: snapshot.cropRect,
-                    dimensionAlignment: snapshot.outputCodec.dimensionAlignment
-                )
-
-            case .prores(let variant):
-                // VideoToolbox path. The 4444 variant carries alpha
-                // straight from the BGRA source (.last); the 422 family
-                // flattens it. The pixel buffer fed to the adaptor is the
-                // same 32BGRA the source reader already produces.
-                let container = snapshot.outputContainer
-                let srcAlpha: CGImageAlphaInfo = variant.hasAlpha ? .last : .noneSkipLast
-                pipeline = EncodePipeline(
-                    sourceURL: snapshot.sourceURL,
-                    makeSink: { w, h, _ in
-                        let sink = try AVAssetWriterVideoSink(
-                            destURL: outURL,
-                            codec: variant.avCodec,
-                            fileType: container.fileType,
-                            width: w, height: h,
-                            audio: audioData)
-                        builtSink = sink
-                        return sink
-                    },
-                    progress: progressCb,
-                    sourceAlphaInfo: srcAlpha,
-                    frameRange: pipelineFrameRange,
-                    outputSize: snapshot.outputSize,
-                    resizeQuality: snapshot.resizeQuality,
-                    aspectMode: snapshot.aspectMode,
-                    cropRect: snapshot.cropRect,
-                    dimensionAlignment: snapshot.outputCodec.dimensionAlignment
-                )
-
-            case .h264, .hevc:
-                // Phase 2a — H.264 / HEVC OPAQUE via the same
-                // AVAssetWriterVideoSink (32BGRA source → yuv420p). The
-                // rate-control + profile knobs come from the job's
-                // videoSettings, applied as AVVideoCompressionProperties.
-                // HEVC-with-alpha is Phase 2b (this path is opaque only).
-                guard let vtCodec = snapshot.outputCodec.videoToolboxCodec else {
-                    throw NSError(
-                        domain: "GlEnc", code: -2,
-                        userInfo: [NSLocalizedDescriptionKey:
-                            "No VideoToolbox codec for \(snapshot.outputCodec)"])
-                }
-                let container = snapshot.outputContainer
-                let includeH264Profile = (snapshot.outputCodec == .h264)
-                let props = snapshot.videoSettings.compressionProperties(
-                    includeH264Profile: includeH264Profile)
-                pipeline = EncodePipeline(
-                    sourceURL: snapshot.sourceURL,
-                    makeSink: { w, h, _ in
-                        let sink = try AVAssetWriterVideoSink(
-                            destURL: outURL,
-                            codec: vtCodec,
-                            fileType: container.fileType,
-                            width: w, height: h,
-                            compressionProperties: props,
-                            audio: audioData)
-                        builtSink = sink
-                        return sink
-                    },
-                    progress: progressCb,
-                    sourceAlphaInfo: .noneSkipLast,
-                    frameRange: pipelineFrameRange,
-                    outputSize: snapshot.outputSize,
-                    resizeQuality: snapshot.resizeQuality,
-                    aspectMode: snapshot.aspectMode,
-                    cropRect: snapshot.cropRect,
-                    dimensionAlignment: snapshot.outputCodec.dimensionAlignment
-                )
-
-            case .mjpeg:
-                // Phase 3 — Motion JPEG via AVVideoCodecType.jpeg on the
-                // same sink. Intra-frame, opaque; the only meaningful knob
-                // is JPEG quality (AVVideoQualityKey) — shipped at a sane
-                // default (no Advanced popover, like the other simple
-                // codecs). Container is .mov (AVAssetWriter native).
-                let container = snapshot.outputContainer
-                let props: [String: Any] = [AVVideoQualityKey: Self.mjpegDefaultQuality]
-                pipeline = EncodePipeline(
-                    sourceURL: snapshot.sourceURL,
-                    makeSink: { w, h, _ in
-                        let sink = try AVAssetWriterVideoSink(
-                            destURL: outURL,
-                            codec: .jpeg,
-                            fileType: container.fileType,
-                            width: w, height: h,
-                            compressionProperties: props,
-                            audio: audioData)
-                        builtSink = sink
-                        return sink
-                    },
-                    progress: progressCb,
-                    sourceAlphaInfo: .noneSkipLast,
-                    frameRange: pipelineFrameRange,
-                    outputSize: snapshot.outputSize,
-                    resizeQuality: snapshot.resizeQuality,
-                    aspectMode: snapshot.aspectMode,
-                    cropRect: snapshot.cropRect,
-                    dimensionAlignment: snapshot.outputCodec.dimensionAlignment
-                )
-            }
+            let request = EncodeRequest(
+                sourceURL: snapshot.sourceURL,
+                outputURL: outURL,
+                codec: snapshot.outputCodec,
+                container: snapshot.outputContainer,
+                videoSettings: snapshot.videoSettings,
+                // Resize Release Phase E/G + Crop Release Phase F — the
+                // per-job transform knobs flow straight through to the
+                // pipeline. `.original` / nil are the byte-identical no-ops.
+                outputSize: snapshot.outputSize,
+                resizeQuality: snapshot.resizeQuality,
+                aspectMode: snapshot.aspectMode,
+                cropRect: snapshot.cropRect,
+                frameRange: pipelineFrameRange,
+                // v0.9.2 Phase D.5 — bundle-derived writer-version string for
+                // the udta/©swr "Encoding software" atom.
+                writerVersion: AppVersion.writerVersion,
+                // Slice 4 — per-job HAP chunk count. 1 (default) keeps the
+                // single-section path byte-identical; the library ignores it
+                // for non-HAP formats.
+                hapChunks: snapshot.hapChunks)
+            let pipeline = try CoreEncoder.makePipeline(
+                request,
+                audio: audioData,
+                progress: progressCb,
+                onSinkBuilt: { builtSink = $0 })
             try await pipeline.run()
 
             // Fix-Brief 2 — merge the read-side warning (A1/A2/C/D) with any

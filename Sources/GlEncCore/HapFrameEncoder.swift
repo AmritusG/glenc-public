@@ -11,12 +11,16 @@
  *
  *     codec    block source(s)                       section type(s) emitted
  *     ─────    ──────────────────────────────────    ────────────────────────
- *     hap1     DXT1Encoder.encodeBlocks              0xBB (single section)
- *     hap5     DXT5Encoder.encodeBlocks              0xBE (single section)
- *     hapY     HapYBlockPacker.packBlocks            0xBF (single section)
- *     hapA     HapABlockPacker.packBlocks            0xB1 (single section, v0.9.2)
+ *     hap1     DXT1Encoder.encodeBlocks              0xBB single / 0xCB chunked
+ *     hap5     DXT5Encoder.encodeBlocks              0xBE single / 0xCE chunked
+ *     hapY     HapYBlockPacker.packBlocks            0xBF single / 0xCF chunked
+ *     hapA     HapABlockPacker.packBlocks            0xB1 single / 0xC1 chunked
  *     hapM     HapYBlockPacker + HapABlockPacker     0x0D outer wrapping
- *                                                    0xBF (HapY) + 0xB1 (HapA)  (v0.9.3)
+ *                                                    0xBF/0xCF (HapY) + 0xB1/0xC1 (HapA)
+ *
+ * The 0xC_ chunked alternatives engage when `chunks >= 2` (v1.2.0):
+ * Slice 1 hap1/hap5, Slice 2 hapM inners, Slice 3 standalone hapY/hapA.
+ * `chunks == 1` is byte-identical to the single-section forms above.
  *
  * Per-frame, this encoder returns the full HAP section packet (header
  * + Snappy-compressed BC stream — or for HapM, the outer 0x0D packet
@@ -65,6 +69,38 @@ public final class HapFrameEncoder: FrameEncoder {
             case .hapM: return "HapM"
             }
         }
+
+        /// Outer 0xC_ section type for the standalone chunked write
+        /// path, or nil for variants with no top-level chunked form.
+        /// Low nibble matches the single-section type (0xBB→0xCB,
+        /// 0xBE→0xCE Slice 1; 0xBF→0xCF, 0xB1→0xC1 Slice 3) so the
+        /// decoder resolves the same texture format post-decompress.
+        /// `.hapM` stays nil: it is a composite handled in
+        /// `encodeHapM`, which chunks its two INNER sections directly
+        /// and never reaches the shared single-section branch. v1.2.0.
+        var chunkedSectionType: UInt8? {
+            switch self {
+            case .hap1: return 0xCB
+            case .hap5: return 0xCE
+            case .hapY: return 0xCF
+            case .hapA: return 0xC1
+            case .hapM: return nil
+            }
+        }
+
+        /// BC block size in bytes for chunk-aligned splitting, or nil
+        /// for variants with no top-level chunked form. DXT1 = 8,
+        /// DXT5/BC3 = 16, BC4 alpha = 8. `.hapM` is nil (see
+        /// `chunkedSectionType`).
+        var chunkBlockSize: Int? {
+            switch self {
+            case .hap1: return 8
+            case .hap5: return 16
+            case .hapY: return 16   // scaled-YCoCg BC3
+            case .hapA: return 8    // RGTC1/BC4 alpha
+            case .hapM: return nil
+            }
+        }
     }
 
     /// Inner section type bytes for HapM's two inner sections.
@@ -75,7 +111,34 @@ public final class HapFrameEncoder: FrameEncoder {
     private static let hapMInnerHapYSnappy: UInt8 = 0xBF
     private static let hapMInnerHapASnappy: UInt8 = 0xB1
 
+    /// Chunked (0xC_) inner section type bytes for HapM's two inner
+    /// textures, used when `chunks >= 2` (v1.2.0 Slice 2). Low nibble
+    /// matches the single-section inner types (0xBF→0xCF HapY color,
+    /// 0xB1→0xC1 HapA alpha) so the decoder resolves the same
+    /// TextureKind post-decompress. The outer 0x0D wrapper is
+    /// UNCHANGED — only the inner sections switch to the chunked form,
+    /// which `HAPHQDecoder.decodeHapMToRGBA` routes by TextureKind
+    /// exactly like the single-section inner sections.
+    private static let hapMInnerHapYChunked: UInt8 = 0xCF
+    private static let hapMInnerHapAChunked: UInt8 = 0xC1
+
+    /// BC block sizes for HapM's two inner textures (chunk-aligned
+    /// split). HapY color is BC3 (16 B/block); HapA alpha is BC4
+    /// (8 B/block). Matches HapYBlockPacker / HapABlockPacker output.
+    private static let hapMHapYBlockSize = 16
+    private static let hapMHapABlockSize = 8
+
     public let codec: Codec
+
+    /// Number of independently-Snappy'd chunks to emit per frame.
+    /// 1 (default) = the legacy single-section path, byte-identical to
+    /// pre-v1.2.0 output. >= 2 routes the chunked-section writer —
+    /// honoured for ALL FIVE variants: `.hap1`/`.hap5` (0xCB/0xCE
+    /// single outer, Slice 1), `.hapM` (the UNCHANGED outer 0x0D
+    /// wrapping two chunked inner textures: 0xCF HapY color + 0xC1
+    /// HapA alpha, Slice 2), and standalone `.hapY` (0xCF) / `.hapA`
+    /// (0xC1) (Slice 3). v1.2.0.
+    public let chunks: Int
 
     // Per-case state. For .hap1/.hap5/.hapY/.hapA exactly one of these
     // is non-nil after `prepare`. For .hapM BOTH `hapY` and `hapA`
@@ -86,8 +149,9 @@ public final class HapFrameEncoder: FrameEncoder {
     private var hapY: HapYBlockPacker?
     private var hapA: HapABlockPacker?
 
-    public init(codec: Codec) {
+    public init(codec: Codec, chunks: Int = 1) {
         self.codec = codec
+        self.chunks = chunks
     }
 
     public func prepare(width: Int, height: Int, fps: Double, hasAlpha: Bool) throws {
@@ -163,6 +227,21 @@ public final class HapFrameEncoder: FrameEncoder {
             // Handled in the early-return branch above.
             fatalError("unreachable — .hapM is handled in encodeHapM(frame:)")
         }
+        // Chunked path (v1.2.0) — standalone Hap1/Hap5 (0xCB/0xCE,
+        // Slice 1) and standalone HapY/HapA (0xCF/0xC1, Slice 3),
+        // N >= 2. ADDITIVE: N == 1 falls through to the untouched
+        // single-section path below, so legacy output stays
+        // byte-identical. The section TYPE byte is the arbiter the
+        // decoder dispatches on, not the chunk count. `.hapM` never
+        // reaches here — it returns early via encodeHapM, which chunks
+        // its two inner sections itself (Slice 2).
+        if chunks >= 2, let blockSize = codec.chunkBlockSize,
+           let outerType = codec.chunkedSectionType {
+            return try HAPChunkedSection.make(
+                blocks: blocks, blockSize: blockSize,
+                chunkCount: chunks, outerType: outerType)
+        }
+
         let snappyPayload = SnappyCompressor.compress(blocks)
         return try HAPSection.make(payload: snappyPayload, type: codec.sectionType)
     }
@@ -191,12 +270,32 @@ public final class HapFrameEncoder: FrameEncoder {
         }
         let bc3 = try yp.packBlocks(frame: frame)
         let bc4 = try ap.packBlocks(frame: frame)
-        let snappyY = SnappyCompressor.compress(bc3)
-        let snappyA = SnappyCompressor.compress(bc4)
-        let innerY = try HAPSection.make(payload: snappyY,
+
+        // Chunked path (v1.2.0 Slice 2) — N >= 2 only. ADDITIVE: each
+        // inner texture is chunked INDEPENDENTLY via the Slice 1
+        // HAPChunkedSection writer (reused verbatim, parameterized by
+        // outer type + block size), then both chunked inner sections
+        // are wrapped in the UNCHANGED outer 0x0D below. N == 1 falls
+        // through to the single-section inner sections, byte-identical
+        // to pre-Slice-2 HapM. The inner section TYPE byte (0xCF/0xC1)
+        // is the arbiter the decoder dispatches on, not the chunk count.
+        let innerY: Data
+        let innerA: Data
+        if chunks >= 2 {
+            innerY = try HAPChunkedSection.make(
+                blocks: bc3, blockSize: Self.hapMHapYBlockSize,
+                chunkCount: chunks, outerType: Self.hapMInnerHapYChunked)
+            innerA = try HAPChunkedSection.make(
+                blocks: bc4, blockSize: Self.hapMHapABlockSize,
+                chunkCount: chunks, outerType: Self.hapMInnerHapAChunked)
+        } else {
+            let snappyY = SnappyCompressor.compress(bc3)
+            let snappyA = SnappyCompressor.compress(bc4)
+            innerY = try HAPSection.make(payload: snappyY,
                                          type: Self.hapMInnerHapYSnappy)
-        let innerA = try HAPSection.make(payload: snappyA,
+            innerA = try HAPSection.make(payload: snappyA,
                                          type: Self.hapMInnerHapASnappy)
+        }
         // Q2 — HapY first, HapA second.
         var combined = Data(capacity: innerY.count + innerA.count)
         combined.append(innerY)
