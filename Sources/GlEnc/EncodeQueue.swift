@@ -120,7 +120,60 @@ final class EncodeQueue: ObservableObject {
     /// queue table's row selection and (programmatically) by
     /// `addJobs` (auto-select first row when nothing was selected)
     /// and `removeJob` (move to neighbor or clear).
-    @Published var selectedJobID: EncodeJob.ID?
+    ///
+    /// Batch-edit — this is now the PRIMARY (focused) row of a possibly
+    /// multi-row selection (`selectedJobIDs`). The preview pane, trim and
+    /// crop keep following this single row. Setting it to a row outside
+    /// the current selection collapses the selection to that row.
+    @Published var selectedJobID: EncodeJob.ID? {
+        didSet {
+            guard selectedJobID != oldValue else { return }
+            if let id = selectedJobID {
+                if !selectedJobIDs.contains(id) { selectedJobIDs = [id] }
+            } else if !selectedJobIDs.isEmpty {
+                selectedJobIDs = []
+            }
+        }
+    }
+
+    /// Batch-edit — the full List selection (Cmd/Shift-click, Cmd-A).
+    /// Bound to `List(selection:)`. Keeps `selectedJobID` pointing at a
+    /// member: a newly-added member becomes primary, and if the primary
+    /// left the set, the first remaining row (queue order) takes over.
+    @Published var selectedJobIDs: Set<EncodeJob.ID> = [] {
+        didSet {
+            guard selectedJobIDs != oldValue else { return }
+            if selectedJobIDs.isEmpty {
+                if selectedJobID != nil { selectedJobID = nil }
+                return
+            }
+            if let p = selectedJobID, selectedJobIDs.contains(p) { return }
+            let added = selectedJobIDs.subtracting(oldValue)
+            let pool = added.isEmpty ? selectedJobIDs : added
+            selectedJobID = jobs.first(where: { pool.contains($0.id) })?.id
+                ?? pool.first
+        }
+    }
+
+    /// Batch-edit — true when ≥2 rows are selected: the top settings bar
+    /// then edits those rows instead of the defaults for new files.
+    var isBatchSelection: Bool { selectedJobIDs.count >= 2 }
+
+    /// Batch-edit — select every row (header button + Edit ▸ Select All
+    /// Clips). The primary row is kept if there was one.
+    func selectAllJobs() {
+        selectedJobIDs = Set(jobs.map(\.id))
+    }
+
+    /// Batch-edit — drop back to just the primary row.
+    func collapseSelectionToPrimary() {
+        if let p = selectedJobID { selectedJobIDs = [p] } else { selectedJobIDs = [] }
+    }
+
+    /// The selected jobs in queue order (batch targets + bar display).
+    var selectedJobs: [EncodeJob] {
+        jobs.filter { selectedJobIDs.contains($0.id) }
+    }
 
     /// Convenience accessor for the currently-selected job.
     var selectedJob: EncodeJob? {
@@ -295,15 +348,27 @@ final class EncodeQueue: ObservableObject {
         // Slice 4 — seed the per-job HAP chunk count from the persisted
         // default (read directly, mirroring the audio defaults above).
         let hapChunks = AppSettings.shared.defaultHapChunks
+        // Batch-edit / defaults parity — the non-DXV codec defaults
+        // (ProRes / H.264 / HEVC / MJPEG), container and H.264/HEVC knobs.
+        let defaults = defaultSettings
         let firstAddedIdx = jobs.count
         for url in urls {
-            let job = EncodeJob(sourceURL: url, format: format,
+            var job = EncodeJob(sourceURL: url, format: format,
                                 outputSize: outputSize,
                                 resizeQuality: resizeQuality,
                                 aspectMode: aspectMode,
                                 audioEnabled: audioEnabled,
                                 audioRate: audioRate,
                                 hapChunks: hapChunks)
+            let seeded = job.settings
+            if defaults != seeded {
+                job.settings = defaults
+                // Only codec/container feed the filename; with the DXV
+                // default the init-derived name is left byte-identical.
+                if defaults.affectsAutoName(comparedTo: seeded) {
+                    job.setOutputNameAuto(trimFormat: AppSettings.shared.trimFilenameFormat)
+                }
+            }
             jobs.append(job)
             print("[GlEnc] queued #\(jobs.count - 1): \(url.path) → \(job.format.label)")
             // Multi-Format Phase 1 — probe source alpha asynchronously
@@ -392,6 +457,7 @@ final class EncodeQueue: ObservableObject {
         guard jobs[i].status != .encoding else { return }
         let wasSelected = (selectedJobID == id)
         jobs.remove(at: i)
+        selectedJobIDs.remove(id)
         // Phase 8B: keep selection consistent — when the removed
         // row was selected, move to the row that now occupies index
         // `i` (the successor), or to the new last row if removing the
@@ -409,6 +475,99 @@ final class EncodeQueue: ObservableObject {
 
     func clearCompleted() {
         jobs.removeAll { $0.status == .done || $0.status == .failed }
+        // Batch-edit — drop removed rows from the selection.
+        let live = Set(jobs.map(\.id))
+        let pruned = selectedJobIDs.intersection(live)
+        if pruned != selectedJobIDs { selectedJobIDs = pruned }
+    }
+
+    // MARK: - Settings edits (single job, batch, defaults)
+
+    /// One settings edit. `sourceHasAlpha` is the target job's probed
+    /// source alpha (nil for the defaults, or while the probe is pending)
+    /// — only ProRes alpha-steering reads it.
+    typealias SettingsEdit = (_ settings: inout JobSettings, _ sourceHasAlpha: Bool?) -> Void
+
+    /// Apply `edit` to each of `ids` through the shared `JobSettings`
+    /// rules. Locked rows (encoding / done) are skipped, and every rule
+    /// is apply-where-applicable, so a mixed-codec batch only touches the
+    /// rows a setting applies to. Refreshes the auto-name when codec /
+    /// container changed (the helper still honours a manual rename).
+    func applySettings<S: Sequence>(to ids: S, _ edit: SettingsEdit)
+    where S.Element == EncodeJob.ID {
+        let targets = Set(ids)
+        var updated = jobs
+        var renamed: [EncodeJob.ID] = []
+        for i in updated.indices where targets.contains(updated[i].id) {
+            guard updated[i].status == .queued || updated[i].status == .failed else { continue }
+            let before = updated[i].settings
+            var after = before
+            edit(&after, updated[i].sourceHasAlpha)
+            guard after != before else { continue }
+            updated[i].settings = after
+            if after.affectsAutoName(comparedTo: before) { renamed.append(updated[i].id) }
+        }
+        guard updated != jobs else { return }
+        jobs = updated
+        for id in renamed { refreshAutoNameIfNeeded(jobID: id) }
+    }
+
+    /// Single-job convenience for the job card.
+    func applySettings(to id: EncodeJob.ID, _ edit: SettingsEdit) {
+        applySettings(to: [id], edit)
+    }
+
+    /// The top settings bar's target: the selection when ≥2 rows are
+    /// selected, otherwise the defaults for new files.
+    func applyFromSettingsBar(_ edit: SettingsEdit) {
+        if isBatchSelection {
+            applySettings(to: selectedJobIDs, edit)
+        } else {
+            var s = defaultSettings
+            edit(&s, nil)
+            defaultSettings = s
+        }
+    }
+
+    /// Batch-edit / defaults parity — the full default settings for new
+    /// files, as one value. DXV/HAP format is owned by `defaultTier` ×
+    /// `defaultAlpha`; the rest persists through `AppSettings`.
+    var defaultSettings: JobSettings {
+        get {
+            let s = AppSettings.shared
+            let format = DXVFormat(tier: defaultTier, alpha: defaultAlpha)
+            var codec = s.defaultOutputCodec
+            if case .dxv = codec { codec = .dxv(format) }
+            let container = codec.allowedContainers.contains(s.defaultOutputContainer)
+                ? s.defaultOutputContainer : .mov
+            var r = JobSettings(format: format,
+                                outputCodec: codec,
+                                outputContainer: container,
+                                videoSettings: s.defaultVideoSettings,
+                                hapChunks: s.defaultHapChunks,
+                                audioEnabled: s.defaultAudioEnabled,
+                                audioRate: s.defaultAudioRate,
+                                outputSize: defaultOutputSize,
+                                resizeQuality: defaultResizeQuality,
+                                aspectMode: defaultAspectMode)
+            r.clampAudioRateToContainer()
+            return r
+        }
+        set {
+            let s = AppSettings.shared
+            if defaultTier != newValue.format.qualityTier { defaultTier = newValue.format.qualityTier }
+            if defaultAlpha != newValue.format.alphaMode { defaultAlpha = newValue.format.alphaMode }
+            if s.defaultOutputCodec != newValue.outputCodec { s.defaultOutputCodec = newValue.outputCodec }
+            if s.defaultOutputContainer != newValue.outputContainer { s.defaultOutputContainer = newValue.outputContainer }
+            if s.defaultVideoSettings != newValue.videoSettings { s.defaultVideoSettings = newValue.videoSettings }
+            if s.defaultHapChunks != newValue.hapChunks { s.defaultHapChunks = newValue.hapChunks }
+            if s.defaultAudioEnabled != newValue.audioEnabled { s.defaultAudioEnabled = newValue.audioEnabled }
+            if s.defaultAudioRate != newValue.audioRate { s.defaultAudioRate = newValue.audioRate }
+            if defaultOutputSize != newValue.outputSize { defaultOutputSize = newValue.outputSize }
+            if defaultResizeQuality != newValue.resizeQuality { defaultResizeQuality = newValue.resizeQuality }
+            if defaultAspectMode != newValue.aspectMode { defaultAspectMode = newValue.aspectMode }
+            objectWillChange.send()
+        }
     }
 
     // MARK: - Encode dispatch

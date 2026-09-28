@@ -38,10 +38,15 @@
  *     reports >1 sample/chunk; matching Alley's per-sample chunking is
  *     the smallest fix that keeps Arena happy.
  *
- * mdat size form: 32-bit. Phase 2A's 30-frame testsrc2 corpus is ~2.4 MB;
- * the writer fails fast if a future workload produces an mdat ≥ 4 GB.
- * Switching to 64-bit largesize is a 12-byte header rewrite when the time
- * comes.
+ * Large files (>4 GB): 32-bit forms by default, 64-bit only past
+ * `largeFileThreshold` (= UInt32.max). A mdat whose 32-bit size would
+ * overflow is promoted IN PLACE at finish(): the 8-byte `wide` atom that
+ * precedes the mdat header is the classic QuickTime largesize reservation,
+ * so `wide`(8) + mdat-header(8) are overwritten with one 16-byte largesize
+ * header (size32=1, 'mdat', size64). The body stays put → no chunk offset
+ * moves. Each track's `stco` becomes `co64` (8-byte entries) only when one
+ * of its offsets exceeds the threshold. Files ≤ 4 GB are byte-identical to
+ * the pre-co64 writer (separate `wide` + 32-bit `mdat` + `stco`).
  */
 
 import Foundation
@@ -52,30 +57,19 @@ public final class VariantMOVWriter {
     public enum WriterError: Error, CustomStringConvertible {
         case alreadyFinished
         case notInitialized
-        case mdatExceeds4GB(size: UInt64)
         case nonIntegerFPS(Double)
         case ioError(Error)
         case invalidCodecFourCC(String)
-        /// Fix-Brief 3 (E) — the audio trak's absolute chunk offset would
-        /// exceed UInt32.max (the 32-bit `stco` limit) — i.e. ~4 GB of video
-        /// precedes the audio. Thrown BEFORE the stco is written so it can't
-        /// truncate to a garbage offset (silent-wrong audio). 64-bit `co64`
-        /// is deferred post-1.0.0.
-        case audioOffsetExceeds4GB(offset: UInt64)
         public var description: String {
             switch self {
             case .alreadyFinished: return "VariantMOVWriter: append/finish called after finish()"
             case .notInitialized:  return "VariantMOVWriter: append called on non-initialized writer"
-            case .mdatExceeds4GB(let s):
-                return "VariantMOVWriter: mdat body would be \(s) bytes (>4GB); 64-bit size form needed"
             case .nonIntegerFPS(let f):
                 return "VariantMOVWriter: fps \(f) is not an integer; mdhd timescale derivation requires integer fps"
             case .ioError(let e):
                 return "VariantMOVWriter: I/O error: \(e)"
             case .invalidCodecFourCC(let s):
                 return "VariantMOVWriter: codecFourCC must be exactly 4 ASCII bytes; got \(s.debugDescription)"
-            case .audioOffsetExceeds4GB(let o):
-                return "VariantMOVWriter: audio chunk offset \(o) exceeds 4GB (32-bit stco limit); co64 not yet supported"
             }
         }
     }
@@ -104,7 +98,17 @@ public final class VariantMOVWriter {
     private let sampleDelta: UInt32
     private let writerVersion: String
 
+    /// Largest value a 32-bit atom size / `stco` offset may take before the
+    /// 64-bit form (largesize mdat / `co64`) engages. Production value is
+    /// `UInt32.max`; tests lower it to drive a small file down the 64-bit
+    /// path without minting a >4 GB file.
+    static let defaultLargeFileThreshold = UInt64(UInt32.max)
+    var largeFileThreshold: UInt64 = VariantMOVWriter.defaultLargeFileThreshold
+
     private var fileHandle: FileHandle?
+    /// Offset of the `wide` atom — the largesize reservation directly
+    /// before the mdat header.
+    private var wideOffset: UInt64 = 0
     private var mdatHeaderOffset: UInt64 = 0
     private var mdatBodySize: UInt64 = 0
     private var firstChunkOffset: UInt64 = 0
@@ -227,11 +231,38 @@ public final class VariantMOVWriter {
         throw WriterError.nonIntegerFPS(fps)
     }
 
-    /// Fix-Brief 3 (E) — pure check: does an absolute audio chunk offset fit
-    /// the 32-bit `stco` field? `UInt32(offset)` would silently truncate past
-    /// this, pointing the audio trak at garbage. Unit seam.
-    public static func audioChunkOffsetFitsStco(_ offset: UInt64) -> Bool {
-        offset <= UInt64(UInt32.max)
+    /// Does a chunk-offset table need the 64-bit `co64` form? True iff any
+    /// offset exceeds `threshold` (`UInt32(offset)` would truncate past
+    /// `UInt32.max`). Offsets are monotonic, so callers pass the last one.
+    static func needsCo64(maxOffset: UInt64,
+                          threshold: UInt64 = defaultLargeFileThreshold) -> Bool {
+        maxOffset > threshold
+    }
+
+    /// Chunk-offset atom body — `stco` (4-byte entries) or `co64` (8-byte
+    /// entries). Both: version+flags(4) + entry_count(4) + entries, BE.
+    static func chunkOffsetBody(offsets: [UInt64], wide: Bool) -> Data {
+        var b = Data()
+        b.append(contentsOf: beBytes32(0))                  // version+flags
+        b.append(contentsOf: beBytes32(UInt32(offsets.count)))  // entry_count
+        for o in offsets {
+            if wide {
+                b.append(contentsOf: beBytes64(o))
+            } else {
+                b.append(contentsOf: beBytes32(UInt32(o)))
+            }
+        }
+        return b
+    }
+
+    /// 16-byte largesize mdat header: size32 = 1, 'mdat', size64 (header
+    /// included). Written over `wide` + the 8-byte mdat header at finish().
+    static func largesizeMdatHeader(bodySize: UInt64) -> Data {
+        var h = Data()
+        h.append(contentsOf: beBytes32(1))
+        h.append(contentsOf: ascii("mdat"))
+        h.append(contentsOf: beBytes64(16 + bodySize))
+        return h
     }
 
     public func append(packet: Data, presentationTime: CMTime) throws {
@@ -265,7 +296,7 @@ public final class VariantMOVWriter {
         // success path closes + nils `fileHandle` below (which still surfaces
         // a close error via `try`), so on success this defer sees nil and is
         // a no-op (no double-close). On any throw between here and that close
-        // (audio write, the >4GB guards, the mdat/moov writes) it closes the
+        // (audio write, the mdat/moov writes) it closes the
         // fd that would otherwise leak (no deinit). It writes no bytes, so
         // the success-path byte sequence is untouched.
         defer { try? fileHandle?.close(); fileHandle = nil }
@@ -274,27 +305,25 @@ public final class VariantMOVWriter {
         // Video chunk offsets were recorded as video was written, so they
         // are unaffected; the audio region begins at the current EOF.
         if audioInfo != nil, !audioPCM.isEmpty {
+            // Absolute offset; past the threshold the audio trak gets `co64`
+            // (see audioStcoAtom) instead of a truncated 32-bit `stco`.
             audioChunkOffset = try fh.offset()
-            // Fix-Brief 3 (E) — the audio chunk's ABSOLUTE file offset
-            // (36-byte preamble + all video) can exceed UInt32.max even when
-            // the mdat-body guard below passes (small audio after ~4 GB of
-            // video). Writing it would truncate the stco offset → audio
-            // points to garbage (silent-wrong). Fail loud with a clear error
-            // instead; proper 64-bit `co64` is deferred post-1.0.0.
-            guard Self.audioChunkOffsetFitsStco(audioChunkOffset) else {
-                throw WriterError.audioOffsetExceeds4GB(offset: audioChunkOffset)
-            }
             try fh.write(contentsOf: audioPCM)
             mdatBodySize += UInt64(audioPCM.count)
         }
 
-        // Patch mdat header with the final 32-bit size (video + audio).
+        // Patch the mdat size (video + audio). Fits 32 bits → patch the
+        // existing header's size field (the unchanged ≤4 GB path). Else
+        // promote in place: overwrite wide(8) + mdat header(8) with the
+        // 16-byte largesize header; the body doesn't move.
         let mdatSize = 8 + mdatBodySize
-        guard mdatSize <= UInt64(UInt32.max) else {
-            throw WriterError.mdatExceeds4GB(size: mdatBodySize)
+        if mdatSize <= largeFileThreshold {
+            try fh.seek(toOffset: mdatHeaderOffset)
+            try fh.write(contentsOf: Data(beBytes32(UInt32(mdatSize))))
+        } else {
+            try fh.seek(toOffset: wideOffset)
+            try fh.write(contentsOf: Self.largesizeMdatHeader(bodySize: mdatBodySize))
         }
-        try fh.seek(toOffset: mdatHeaderOffset)
-        try fh.write(contentsOf: Data(beBytes32(UInt32(mdatSize))))
 
         // Append moov at end-of-file.
         try fh.seekToEnd()
@@ -322,6 +351,7 @@ public final class VariantMOVWriter {
 
     private func writeWide() throws {
         guard let fh = fileHandle else { throw WriterError.notInitialized }
+        wideOffset = try fh.offset()
         var atom = Data()
         wrapAtom(into: &atom, type: "wide", body: Data())
         try fh.write(contentsOf: atom)
@@ -540,7 +570,7 @@ public final class VariantMOVWriter {
         appendAtom(into: &b, type: "stts", body: sttsBody())
         appendAtom(into: &b, type: "stsc", body: stscBody())
         appendAtom(into: &b, type: "stsz", body: stszBody())
-        appendAtom(into: &b, type: "stco", body: stcoBody())
+        appendChunkOffsetAtom(into: &b, offsets: videoChunkOffsets())
         return b
     }
 
@@ -614,21 +644,27 @@ public final class VariantMOVWriter {
         return b
     }
 
-    /// stco: one chunk offset per sample (Phase 7A Finding 6 — Alley shape).
-    /// Each sample is its own chunk per stsc above; chunk N's offset is
-    /// firstChunkOffset + sum(sampleSizes[0..<N]).
-    private func stcoBody() -> Data {
-        var b = Data()
-        b.append(contentsOf: beBytes32(0))                  // version+flags
-        b.append(contentsOf: beBytes32(UInt32(sampleSizes.count)))  // entry_count
+    /// Video chunk offsets: one per sample (Phase 7A Finding 6 — Alley
+    /// shape). Each sample is its own chunk per stsc above; chunk N's offset
+    /// is firstChunkOffset + sum(sampleSizes[0..<N]).
+    private func videoChunkOffsets() -> [UInt64] {
+        var offsets = [UInt64]()
+        offsets.reserveCapacity(sampleSizes.count)
         var running = firstChunkOffset
         for size in sampleSizes {
-            // mdat must fit in 32-bit offsets (enforced at finish() — see
-            // the mdatExceeds4GB guard). Cast is safe under that guard.
-            b.append(contentsOf: beBytes32(UInt32(running)))
+            offsets.append(running)
             running += UInt64(size)
         }
-        return b
+        return offsets
+    }
+
+    /// Emit `stco`, or `co64` when the last (largest) offset exceeds
+    /// `largeFileThreshold`. Type and entry width switch together; the atom
+    /// size follows from the body (moov sits after mdat, so no offset moves).
+    private func appendChunkOffsetAtom(into dst: inout Data, offsets: [UInt64]) {
+        let wide = Self.needsCo64(maxOffset: offsets.last ?? 0, threshold: largeFileThreshold)
+        appendAtom(into: &dst, type: wide ? "co64" : "stco",
+                   body: Self.chunkOffsetBody(offsets: offsets, wide: wide))
     }
 
     /// udta with a single ©swr atom = writer identity string.
@@ -759,7 +795,8 @@ public final class VariantMOVWriter {
         appendAtom(into: &b, type: "stts", body: audioSttsBody())
         appendAtom(into: &b, type: "stsc", body: audioStscBody())
         appendAtom(into: &b, type: "stsz", body: audioStszBody())
-        appendAtom(into: &b, type: "stco", body: audioStcoBody())
+        // Audio: a single chunk at the audio region's mdat offset.
+        appendChunkOffsetAtom(into: &b, offsets: [audioChunkOffset])
         return b
     }
 
@@ -912,15 +949,6 @@ public final class VariantMOVWriter {
         return b
     }
 
-    /// audio stco: single chunk at the audio region's mdat offset.
-    private func audioStcoBody() -> Data {
-        var b = Data()
-        b.append(contentsOf: beBytes32(0))               // version+flags
-        b.append(contentsOf: beBytes32(1))               // entry_count
-        b.append(contentsOf: beBytes32(UInt32(audioChunkOffset)))
-        return b
-    }
-
     // MARK: - Atom layout helpers
 
     /// Append the bytes `[size BE32, type bytes, body...]` to `dst`.
@@ -973,6 +1001,11 @@ private func beBytes32(_ v: UInt32) -> [UInt8] {
         UInt8((v >> 8)  & 0xff),
         UInt8( v        & 0xff),
     ]
+}
+
+@inline(__always)
+private func beBytes64(_ v: UInt64) -> [UInt8] {
+    return beBytes32(UInt32(v >> 32)) + beBytes32(UInt32(v & 0xffff_ffff))
 }
 
 @inline(__always)

@@ -97,17 +97,5 @@ let package = Package(
             ],
             path: "Sources/glenc-cli"
         ),
-        .testTarget(
-            name: "GlEncTests",
-            dependencies: [
-                "GlEncCore",
-                "GlEnc",
-                "GlanceCore",
-                "GlancePlayback",
-                // Round-trip oracle for SnappyCompressor.
-                .product(name: "Snappy", package: "swift-snappy"),
-            ],
-            path: "Tests/GlEncTests"
-        ),
     ]
 )

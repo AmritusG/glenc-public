@@ -96,6 +96,14 @@ struct GlEncApp: App {
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
         }
+        // Batch-edit — focus-independent select-all for the queue (plain
+        // ⌘A only reaches the List when it has keyboard focus, and must
+        // keep working in text fields).
+        CommandGroup(after: .pasteboard) {
+            Button("Select All Clips") { queue.selectAllJobs() }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+                .disabled(queue.jobs.isEmpty)
+        }
     }
 
     @ToolbarContentBuilder
