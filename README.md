@@ -5,7 +5,7 @@ source video and encode it to the formats Resolume and other realtime tools
 prefer — including byte-accurate Resolume **DXV3** output — with a queue-based
 GUI, per-job trim/crop/resize/rename, live preview, and audio pass-through.
 
-Version **1.1.0**. Requires **macOS 14 (Sonoma) or later**.
+Version **1.3.0**. Requires **macOS 14 (Sonoma) or later**.
 
 ## Download
 
@@ -61,21 +61,8 @@ These require **your own** Apple Developer credentials — none are bundled:
 
 ## Testing
 
-```bash
-swift test
-```
-
-The test suite includes a DXV3 **byte-identity gate** (GlEnc's DXT1 MOV output
-is compared atom-by-atom and `mdat`-byte-equal against reference encoder
-outputs). A few small reference fixtures ship in `reference/`; the bulk of the
-corpus is regenerable or local-only and tests **skip cleanly** when a fixture is
-absent.
-
-- `scripts/make-corpus.sh` regenerates the deterministic synthetic corpus (and,
-  if FFmpeg is installed, the `testsrc2` source corpus).
-- See [`reference/README.md`](./reference/README.md) for the full fixture story:
-  what ships, what needs FFmpeg (version-pinned), what needs Resolume
-  (unscriptable), and what is local-only.
+The test suite and reference corpus are maintained in the private development
+repository and are not published in this mirror.
 
 ## License
 

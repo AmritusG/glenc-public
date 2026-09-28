@@ -356,48 +356,14 @@ struct JobCardView: View {
             //    are a HAP-only feature, so DXV3 (DXT1/DXT5/YCG6/YG10) never
             //    shows it. 1 = single section (byte-identical to pre-Slice-4).
             if case .dxv = job.outputCodec, job.format.family == .hap {
-                // Custom 1–64 tap-stepper. Draws the SAME combined
-                // `chevron.up.chevron.down` glyph at the SAME `rowChevronStyle()`
-                // (9pt — unchanged; the difference vs the codec chevron was
-                // never glyph size, it was the menu's control BOX).
-                //
-                // To inherit that box by construction rather than faking it
-                // with a tuned frame/font, the chevron is the label of a
-                // borderless `Button` — the same borderless-control context
-                // (controlSize `.regular`) the codec `Menu`
-                // (`.menuStyle(.borderlessButton)`) renders in. The Button is
-                // `.allowsHitTesting(false)`, so it contributes ONLY layout
-                // (the box) and can never swallow the tap; the two
-                // `onTapGesture` zones live in an `.overlay` added afterwards,
-                // so they stay hit-testable and drive +1 / -1. `hapChunksBinding`
-                // clamps 1…64, so +1 at 64 / -1 at 1 no-op safely. The label
-                // Texts carry no font/colour (like the codec menu's label
-                // Text); the number sits in a fixed-width monospaced-digit
-                // slot so the chevron doesn't shift sideways (1 vs 64).
-                HStack(spacing: 4) {
-                    Text("Chunks:")
-                    Text("\(job.hapChunks)")
-                        .monospacedDigit()
-                        .frame(width: 18, alignment: .trailing)
-                    Button(action: {}) {
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 12))
-                            .foregroundColor(.white)
-                    }
-                    .buttonStyle(.borderless)
-                    .allowsHitTesting(false)        // box only — never grabs the tap
-                    .overlay(
-                        VStack(spacing: 0) {
-                            Color.clear.contentShape(Rectangle())
-                                .onTapGesture { hapChunksBinding.wrappedValue = job.hapChunks + 1 }
-                            Color.clear.contentShape(Rectangle())
-                                .onTapGesture { hapChunksBinding.wrappedValue = job.hapChunks - 1 }
-                        }
-                    )
-                }
-                .fixedSize()
+                // Custom 1–64 tap-stepper — shared with the settings bar
+                // (SettingsControls.swift). Clamped 1…64 in JobSettings,
+                // so +1 at 64 / -1 at 1 no-op safely.
+                HapChunksStepper(
+                    valueText: "\(job.hapChunks)",
+                    onIncrement: { edit { s, _ in s.setHapChunks(job.hapChunks + 1) } },
+                    onDecrement: { edit { s, _ in s.setHapChunks(job.hapChunks - 1) } })
                 .disabled(!isMutable)
-                .help("HAP chunked-section count (1–64). 1 = single section. Higher splits each frame into more independently-decodable chunks for parallel GPU upload.")
             }
 
             Spacer()
@@ -457,69 +423,11 @@ struct JobCardView: View {
         .frame(width: 320, alignment: .leading)
     }
 
-    /// Phase 2a — H.264/HEVC rate-control knobs: a mode toggle
-    /// (Quality / Bitrate) + the active control, keyframe interval,
-    /// the H.264 profile (H.264 only), and the container. Sane defaults
-    /// are pre-filled so an untouched job just encodes well.
-    @ViewBuilder
+    /// Phase 2a — H.264/HEVC rate-control knobs, shared with the settings
+    /// bar (`VideoAdvancedControls`, SettingsControls.swift).
     private var videoRateControlControls: some View {
-        Picker("Rate control:", selection: rateControlModeBinding) {
-            Text("Quality").tag(RateControlMode.quality)
-            Text("Bitrate").tag(RateControlMode.bitrate)
-        }
-        .pickerStyle(.segmented)
-
-        if job.videoSettings.rateControl.isQuality {
-            HStack(spacing: 8) {
-                Text("Quality:")
-                Slider(value: qualityBinding, in: 0.1...1.0)
-                Text(String(format: "%.2f", currentQuality))
-                    .font(.caption).monospacedDigit()
-                    .frame(width: 34, alignment: .trailing)
-            }
-        } else {
-            HStack(spacing: 8) {
-                Text("Bitrate:")
-                TextField("Mbps", value: bitrateMbpsBinding, format: .number)
-                    .frame(width: 64)
-                Text("Mbps")
-                    .font(.caption).foregroundColor(.secondary)
-            }
-        }
-
-        HStack(spacing: 8) {
-            Text("Keyframe interval:")
-            TextField("frames", value: keyframeBinding, format: .number)
-                .frame(width: 56)
-            Text("frames (0 = auto)")
-                .font(.caption).foregroundColor(.secondary)
-        }
-
-        if job.outputCodec == .h264 {
-            Picker("Profile:", selection: h264ProfileBinding) {
-                ForEach(VideoEncodeSettings.H264Profile.allCases, id: \.self) { p in
-                    Text(p.label).tag(p)
-                }
-            }
-            .pickerStyle(.menu)
-        }
-
-        Picker("Container:", selection: containerBinding) {
-            ForEach(job.outputCodec.allowedContainers, id: \.self) { c in
-                Text(c.label).tag(c)
-            }
-        }
-        .pickerStyle(.menu)
-
-        Text(job.outputCodec == .hevc
-             ? "HEVC encodes opaque this version (alpha support is upcoming)."
-             : "H.264 — the universal-delivery codec.")
-            .font(.caption)
-            .foregroundColor(.secondary)
+        VideoAdvancedControls(settings: job.settings, apply: { edit($0) })
     }
-
-    /// UI-only mode discriminator for the rate-control segmented picker.
-    enum RateControlMode { case quality, bitrate }
 
     // MARK: - Audio row (Phase 4): enable/disable (strip) + rate
 
@@ -585,41 +493,20 @@ struct JobCardView: View {
     }
 
     private func setAudioEnabled(_ on: Bool) {
-        guard let i = queue.jobs.firstIndex(where: { $0.id == job.id }) else { return }
-        queue.jobs[i].audioEnabled = on
+        edit { s, _ in s.setAudioEnabled(on) }
     }
     private func setAudioRate(_ rate: AudioRate) {
-        guard let i = queue.jobs.firstIndex(where: { $0.id == job.id }) else { return }
-        queue.jobs[i].audioRate = rate
+        edit { s, _ in s.setAudioRate(rate) }
     }
 
     /// A rate the current container can't carry (AAC/.mp4 > 48 kHz) — the
     /// menu greys it out rather than offering a choice that would be
     /// resampled down at encode.
     private func audioRateUnavailable(_ rate: AudioRate) -> Bool {
-        guard let hz = rate.hz else { return false }   // Original always ok
-        return hz > job.outputContainer.maxAudioSampleRate
+        job.settings.audioRateUnavailable(rate)
     }
 
-    /// Clamp the job's audio rate to the container's max when it can't
-    /// carry the current selection (e.g. a 96k job switched to H.264/.mp4).
-    /// Keeps displayed == actual instead of showing 96k while encoding 48k.
-    private func clampAudioRateToContainer(_ i: Int) {
-        if let hz = queue.jobs[i].audioRate.hz,
-           hz > queue.jobs[i].outputContainer.maxAudioSampleRate {
-            queue.jobs[i].audioRate = .hz48000
-        }
-    }
-
-    private var codecFamilyLabel: String {
-        switch job.outputCodec {
-        case .dxv:    return job.format.qualityTier.label
-        case .prores: return "ProRes"
-        case .h264:   return "H.264"
-        case .hevc:   return "HEVC"
-        case .mjpeg:  return "Motion JPEG"
-        }
-    }
+    private var codecFamilyLabel: String { job.settings.codecFamilyLabel }
 
     // MARK: - Resize row: Output Size + Resize Quality (v0.9.4-pending Phase F)
 
@@ -634,53 +521,11 @@ struct JobCardView: View {
         HStack(spacing: 16) {
             // ─── Output Size ──────────────────────────────────────
             Menu {
-                Button("Original") {
-                    outputSizeBinding.wrappedValue = .original
-                }
-                // Phase H — user-named presets at the top of the
-                // menu (per RESIZE_PLAN.md Q5). Only when non-empty.
-                if !settings.customPresets.isEmpty {
-                    Section("My Sizes") {
-                        ForEach(settings.customPresets) { preset in
-                            Button(preset.displayLabel) {
-                                outputSizeBinding.wrappedValue =
-                                    .custom(width: preset.width, height: preset.height)
-                            }
-                        }
-                    }
-                }
-                Section("HD / UHD") {
-                    presetButton(.hd_1280_720)
-                    presetButton(.fhd_1920_1080)
-                    presetButton(.qhd_2560_1440)
-                    presetButton(.uhd_3840_2160)
-                }
-                Section("DCI Cinema") {
-                    presetButton(.dci_2048_1080)
-                    presetButton(.dci_4096_2160)
-                }
-                Section("Square") {
-                    presetButton(.sq_1024)
-                    presetButton(.sq_1080)
-                    presetButton(.sq_2048)
-                }
-                Section("Vertical") {
-                    presetButton(.v_720_1280)
-                    presetButton(.v_1080_1920)
-                    presetButton(.v_1440_2560)
-                }
-                Divider()
-                Button("Custom…") {
-                    showingCustomSheet = true
-                }
-                // Phase H — Manage Sizes only when there's something
-                // to manage. Keeps the menu lean for users who haven't
-                // saved anything yet.
-                if !settings.customPresets.isEmpty {
-                    Button("Manage Sizes…") {
-                        showingManageSheet = true
-                    }
-                }
+                OutputSizeMenuItems(
+                    settings: settings,
+                    onSelect: { outputSizeBinding.wrappedValue = $0 },
+                    onCustom: { showingCustomSheet = true },
+                    onManage: { showingManageSheet = true })
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.up.chevron.down")
@@ -745,28 +590,9 @@ struct JobCardView: View {
         .padding(.leading, -4)
     }
 
-    /// Helper: build a Button for one StandardResolution preset.
-    @ViewBuilder
-    private func presetButton(_ preset: StandardResolution) -> some View {
-        Button(preset.displayLabel) {
-            outputSizeBinding.wrappedValue = .preset(preset)
-        }
-    }
-
-    /// Compact label for the Output Size menu's collapsed view. Full
-    /// preset displayLabels ("Full HD — 1920×1080") are too long for
-    /// the row; the menu items show the full label, the row shows
-    /// just the dims.
+    /// Compact label for the Output Size menu's collapsed view.
     private var outputSizeMenuLabel: String {
-        switch job.outputSize {
-        case .original:
-            return "Original"
-        case .preset(let p):
-            let (w, h) = p.dimensions
-            return "\(w)×\(h)"
-        case .custom(let w, let h):
-            return "Custom \(w)×\(h)"
-        }
+        OutputSizeMenuItems.label(job.outputSize)
     }
 
     private var isOriginalSize: Bool {
@@ -1230,34 +1056,26 @@ struct JobCardView: View {
 
     // MARK: - Bindings + Retry
 
-    /// Multi-Format Phase 1 — select a DXV/HAP family tier. Preserves
-    /// the current alpha mode (read from `format`, which still holds the
-    /// last DXV selection even while ProRes is active) and re-points
-    /// `outputCodec` at the `.dxv` path so dispatch routes correctly.
-    private func selectDXVTier(_ tier: QualityTier) {
-        guard let i = queue.jobs.firstIndex(where: { $0.id == job.id }) else { return }
-        let currentAlpha = queue.jobs[i].format.alphaMode
-        let newFormat = DXVFormat(tier: tier, alpha: currentAlpha)
-        queue.jobs[i].format = newFormat
-        queue.jobs[i].outputCodec = .dxv(newFormat)
-        queue.jobs[i].outputContainer = .mov
-        queue.refreshAutoNameIfNeeded(jobID: job.id)
+    /// Batch-edit — every settings edit routes through the queue's shared
+    /// `JobSettings` rules (the same path the settings bar's batch and
+    /// defaults edits use), so single-job and batch can't diverge. The
+    /// queue refreshes the auto-name when codec / container changed.
+    private func edit(_ e: EncodeQueue.SettingsEdit) {
+        queue.applySettings(to: job.id, e)
     }
 
-    /// Switch the job to ProRes. Alpha steering: default to the variant
-    /// `steeredProResVariant` picks (4444 for an alpha source, else 422).
+    /// Select a DXV/HAP family tier (keeps the current alpha mode).
+    private func selectDXVTier(_ tier: QualityTier) {
+        edit { s, _ in s.selectDXVTier(tier) }
+    }
+
+    /// Switch to ProRes, alpha-steered (4444 for an alpha source, else 422).
     private func selectProRes() {
-        guard let i = queue.jobs.firstIndex(where: { $0.id == job.id }) else { return }
-        let variant = queue.jobs[i].steeredProResVariant
-        queue.jobs[i].outputCodec = .prores(variant)
-        queue.jobs[i].outputContainer = .mov
-        queue.refreshAutoNameIfNeeded(jobID: job.id)
+        edit { s, alpha in s.selectProRes(sourceHasAlpha: alpha) }
     }
 
     private func setProResVariant(_ v: ProResVariant) {
-        guard let i = queue.jobs.firstIndex(where: { $0.id == job.id }) else { return }
-        queue.jobs[i].outputCodec = .prores(v)
-        queue.refreshAutoNameIfNeeded(jobID: job.id)
+        edit { s, _ in s.setProResVariant(v) }
     }
 
     private var proResVariantBinding: Binding<ProResVariant> {
@@ -1267,135 +1085,38 @@ struct JobCardView: View {
         )
     }
 
-    // MARK: - Phase 2a — H.264 / HEVC handlers + rate-control bindings
-
-    /// Switch to H.264 or HEVC. Defaults the container to `.mp4` — the
-    /// broad-delivery target that distinguishes these codecs from the
-    /// QuickTime-native DXV/HAP/ProRes families; the user can switch to
-    /// `.mov` in the second menu / Advanced popover. videoSettings keeps
-    /// its current/default values.
+    /// Switch to H.264 / HEVC / Motion JPEG (container .mp4 where allowed).
     private func selectVideoCodec(_ codec: OutputCodec) {
-        guard let i = queue.jobs.firstIndex(where: { $0.id == job.id }) else { return }
-        queue.jobs[i].outputCodec = codec
-        // Default container: .mp4 for the broad-delivery codecs that allow
-        // it (H.264/HEVC); .mov for MJPEG (its only allowed container).
-        queue.jobs[i].outputContainer =
-            codec.allowedContainers.contains(.mp4) ? .mp4 : .mov
-        clampAudioRateToContainer(i)   // AAC/.mp4 caps audio at 48 kHz
-        queue.refreshAutoNameIfNeeded(jobID: job.id)
+        edit { s, _ in s.selectVideoCodec(codec) }
     }
 
     private func setContainer(_ c: OutputContainer) {
-        guard let i = queue.jobs.firstIndex(where: { $0.id == job.id }) else { return }
-        queue.jobs[i].outputContainer = c
-        clampAudioRateToContainer(i)   // AAC/.mp4 caps audio at 48 kHz
-        // Extension changes with the container — refresh the auto-name.
-        queue.refreshAutoNameIfNeeded(jobID: job.id)
+        edit { s, _ in s.setContainer(c) }
     }
 
-    private func updateJob(_ mutate: (inout EncodeJob) -> Void) {
-        guard let i = queue.jobs.firstIndex(where: { $0.id == job.id }) else { return }
-        mutate(&queue.jobs[i])
-    }
-
-    private var currentQuality: Double {
-        if case .quality(let q) = job.videoSettings.rateControl { return q }
-        return 0.6
-    }
-    private var currentBitrateMbps: Double {
-        if case .bitrate(let m) = job.videoSettings.rateControl { return m }
-        return 10
-    }
-
-    private var rateControlModeBinding: Binding<RateControlMode> {
-        Binding(
-            get: { job.videoSettings.rateControl.isQuality ? .quality : .bitrate },
-            set: { mode in
-                updateJob { j in
-                    switch mode {
-                    case .quality: j.videoSettings.rateControl = .quality(0.6)
-                    case .bitrate: j.videoSettings.rateControl = .bitrate(10)
-                    }
-                }
-            })
-    }
-    private var qualityBinding: Binding<Double> {
-        Binding(get: { currentQuality },
-                set: { v in updateJob { $0.videoSettings.rateControl = .quality(v) } })
-    }
-    private var bitrateMbpsBinding: Binding<Double> {
-        Binding(get: { currentBitrateMbps },
-                set: { v in updateJob { $0.videoSettings.rateControl = .bitrate(max(0.1, v)) } })
-    }
-    private var keyframeBinding: Binding<Int> {
-        Binding(get: { job.videoSettings.keyframeIntervalFrames },
-                set: { v in updateJob { $0.videoSettings.keyframeIntervalFrames = max(0, v) } })
-    }
-    private var h264ProfileBinding: Binding<VideoEncodeSettings.H264Profile> {
-        Binding(get: { job.videoSettings.h264Profile },
-                set: { p in updateJob { $0.videoSettings.h264Profile = p } })
-    }
-    private var containerBinding: Binding<OutputContainer> {
-        Binding(get: { job.outputContainer },
-                set: { c in setContainer(c) })
-    }
-
+    /// Keeps `outputCodec` in lockstep with `format` (JobSettings.setAlpha)
+    /// — previously only `format` was written, so the encode (which
+    /// dispatches on `outputCodec`) kept the OLD alpha variant.
     private var alphaBinding: Binding<AlphaMode> {
         Binding(
             get: { job.format.alphaMode },
-            set: { newAlpha in
-                guard let i = queue.jobs.firstIndex(where: { $0.id == job.id }) else { return }
-                let currentTier = queue.jobs[i].format.qualityTier
-                queue.jobs[i].format = DXVFormat(tier: currentTier, alpha: newAlpha)
-                queue.refreshAutoNameIfNeeded(jobID: job.id)
-            }
+            set: { newAlpha in edit { s, _ in s.setAlpha(newAlpha) } }
         )
     }
 
-    /// Slice 4 — per-job HAP chunk count. Clamps to 1...64 on write so
-    /// the value can never leave range (the Stepper's `in:` enforces it
-    /// too; this guards any programmatic set). Does not affect the
-    /// auto-name. Only surfaced for HAP-family formats (see row2Codec).
-    private var hapChunksBinding: Binding<Int> {
-        Binding(get: { job.hapChunks },
-                set: { v in updateJob { $0.hapChunks = min(64, max(1, v)) } })
-    }
-
-    /// Resize Release Phase F — writes the row's outputSize.
-    /// AutoNameEngine is NOT refreshed here: RESIZE_PLAN.md does not
-    /// specify a filename token for resize, so a size change does
-    /// not alter the auto-name (judgment call where the plan was
-    /// silent — Phase F report flags it).
     private var outputSizeBinding: Binding<OutputSize> {
-        Binding(
-            get: { job.outputSize },
-            set: { newSize in
-                guard let i = queue.jobs.firstIndex(where: { $0.id == job.id }) else { return }
-                queue.jobs[i].outputSize = newSize
-            }
-        )
+        Binding(get: { job.outputSize },
+                set: { v in edit { s, _ in s.setOutputSize(v) } })
     }
 
-    /// Resize Release Phase F — writes the row's resizeQuality.
     private var resizeQualityBinding: Binding<ResizeQuality> {
-        Binding(
-            get: { job.resizeQuality },
-            set: { newQuality in
-                guard let i = queue.jobs.firstIndex(where: { $0.id == job.id }) else { return }
-                queue.jobs[i].resizeQuality = newQuality
-            }
-        )
+        Binding(get: { job.resizeQuality },
+                set: { v in edit { s, _ in s.setResizeQuality(v) } })
     }
 
-    /// Resize Release Phase G — writes the row's aspectMode.
     private var aspectModeBinding: Binding<AspectMode> {
-        Binding(
-            get: { job.aspectMode },
-            set: { newMode in
-                guard let i = queue.jobs.firstIndex(where: { $0.id == job.id }) else { return }
-                queue.jobs[i].aspectMode = newMode
-            }
-        )
+        Binding(get: { job.aspectMode },
+                set: { v in edit { s, _ in s.setAspectMode(v) } })
     }
 
     private func retry() {

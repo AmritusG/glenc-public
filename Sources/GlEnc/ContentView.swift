@@ -7,9 +7,6 @@ import GlEncCore
 struct ContentView: View {
     @EnvironmentObject var queue: EncodeQueue
     @State private var isTargeted = false
-    /// Phase H — Manage Sizes… sheet, presented from the defaults-row
-    /// Size menu when customPresets is non-empty.
-    @State private var showingManageSheet: Bool = false
     // v0.9.2 Phase G.1: the Advanced section's @State properties
     // (clusterFitEnabled, refinedBC4Enabled) and its DisclosureGroup
     // body relocated to PreferencesWindow.advancedSection. Same
@@ -52,11 +49,6 @@ struct ContentView: View {
         // and surfaces this prompt; the user's button choice resumes
         // the continuation and the loop proceeds.
         .modifier(CollisionPromptModifier(queue: queue))
-        // Phase H — Manage Sizes… sheet for the defaults-row Size menu.
-        .sheet(isPresented: $showingManageSheet) {
-            ManageSizesSheet(settings: settings,
-                              onClose: { showingManageSheet = false })
-        }
     }
 
     /// The pre-Phase-8B single-pane layout, now the left column of the
@@ -89,168 +81,13 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Defaults row (global Codec + Alpha menus)
+    // MARK: - Settings bar
 
-    /// Flat HStack of two borderless Menus controlling the queue's
-    /// Resize Release Phase F — compact menu label for the defaults-
-    /// row Output Size menu. Mirrors JobCardView.outputSizeMenuLabel
-    /// but lives on the defaults row (no Custom… case here, since
-    /// the defaults row doesn't offer Custom…).
-    private var defaultOutputSizeMenuLabel: String {
-        switch queue.defaultOutputSize {
-        case .original:
-            return "Original"
-        case .preset(let p):
-            let (w, h) = p.dimensions
-            return "\(w)×\(h)"
-        case .custom(let w, let h):
-            return "Custom \(w)×\(h)"
-        }
-    }
-
-    /// `defaultTier` / `defaultAlpha` bindings — applied to NEW jobs
-    /// at enqueue time. Existing rows keep their own settings.
+    /// Batch-edit — the top settings bar (SettingsBarView): every option a
+    /// job card offers. Edits the defaults for new files, or — with ≥2
+    /// rows selected — those rows.
     private var defaultsRow: some View {
-        HStack(spacing: 16) {
-            Menu {
-                ForEach(QualityTier.allCases) { tier in
-                    Button(tier.label) { queue.defaultTier = tier }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                    Text(queue.defaultTier.label)
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Default codec for newly-dropped files. Existing queue rows keep their own settings.")
-
-            Menu {
-                ForEach(AlphaMode.allCases) { mode in
-                    Button(mode.label) { queue.defaultAlpha = mode }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                    Text(queue.defaultAlpha.label)
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Default alpha mode for newly-dropped files. Existing queue rows keep their own settings.")
-
-            // ─── Resize Release Phase F — Output Size + Quality
-            // defaults. Same `borderlessButton + chevron-before-label`
-            // pattern. Output Size offers Original + the 15 presets
-            // grouped by category; Custom… is intentionally NOT in
-            // the defaults row (judgment call where the plan was
-            // silent — custom-as-default is a per-job edge case).
-            // Quality is always visible; Auto's not-content-aware
-            // limitation is in the help string.
-            Menu {
-                Button("Original") {
-                    queue.defaultOutputSize = .original
-                }
-                // Phase H — user-named presets at the top.
-                if !settings.customPresets.isEmpty {
-                    Section("My Sizes") {
-                        ForEach(settings.customPresets) { preset in
-                            Button(preset.displayLabel) {
-                                queue.defaultOutputSize =
-                                    .custom(width: preset.width, height: preset.height)
-                            }
-                        }
-                    }
-                }
-                Section("HD / UHD") {
-                    Button(StandardResolution.hd_1280_720.displayLabel)   { queue.defaultOutputSize = .preset(.hd_1280_720) }
-                    Button(StandardResolution.fhd_1920_1080.displayLabel) { queue.defaultOutputSize = .preset(.fhd_1920_1080) }
-                    Button(StandardResolution.qhd_2560_1440.displayLabel) { queue.defaultOutputSize = .preset(.qhd_2560_1440) }
-                    Button(StandardResolution.uhd_3840_2160.displayLabel) { queue.defaultOutputSize = .preset(.uhd_3840_2160) }
-                }
-                Section("DCI Cinema") {
-                    Button(StandardResolution.dci_2048_1080.displayLabel) { queue.defaultOutputSize = .preset(.dci_2048_1080) }
-                    Button(StandardResolution.dci_4096_2160.displayLabel) { queue.defaultOutputSize = .preset(.dci_4096_2160) }
-                }
-                Section("Square") {
-                    Button(StandardResolution.sq_1024.displayLabel) { queue.defaultOutputSize = .preset(.sq_1024) }
-                    Button(StandardResolution.sq_1080.displayLabel) { queue.defaultOutputSize = .preset(.sq_1080) }
-                    Button(StandardResolution.sq_2048.displayLabel) { queue.defaultOutputSize = .preset(.sq_2048) }
-                }
-                Section("Vertical") {
-                    Button(StandardResolution.v_720_1280.displayLabel)  { queue.defaultOutputSize = .preset(.v_720_1280) }
-                    Button(StandardResolution.v_1080_1920.displayLabel) { queue.defaultOutputSize = .preset(.v_1080_1920) }
-                    Button(StandardResolution.v_1440_2560.displayLabel) { queue.defaultOutputSize = .preset(.v_1440_2560) }
-                }
-                // Phase H — Manage Sizes…; only when there's something
-                // to manage. Defaults row has no Custom… (existing
-                // judgment call from Phase F).
-                if !settings.customPresets.isEmpty {
-                    Divider()
-                    Button("Manage Sizes…") {
-                        showingManageSheet = true
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                    Text("Size: \(defaultOutputSizeMenuLabel)")
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Default output size for newly-dropped files. Existing queue rows keep their own settings.")
-
-            Menu {
-                ForEach(ResizeQuality.allCases, id: \.self) { q in
-                    Button(q.displayLabel) { queue.defaultResizeQuality = q }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                    Text("Quality: \(queue.defaultResizeQuality.displayLabel)")
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Default resize quality for newly-dropped files. Auto picks Lanczos for downscale, Bilinear for upscale. Auto is NOT content-aware — pick Nearest for pixel-art / hard-edge content.")
-
-            Menu {
-                ForEach(AspectMode.allCases, id: \.self) { mode in
-                    Button(mode.displayLabel) { queue.defaultAspectMode = mode }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                    Text("Aspect: \(queue.defaultAspectMode.displayLabel)")
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Default aspect handling for newly-dropped files. Fit (letterbox) preserves source aspect with black bars; Distort to fill stretches non-uniformly. No effect on .original or matched-aspect resizes.")
-
-            Spacer()
-        }
-        // Negative leading padding compensates for the ~4pt inset the
-        // borderlessButton menu style adds before the custom label —
-        // same trick JobCardView row-2 uses to align flush left.
-        .padding(.leading, -4)
+        SettingsBarView(queue: queue)
     }
 
     // MARK: - Drop zone
@@ -326,6 +163,20 @@ struct ContentView: View {
 
             Spacer()
 
+            // Batch-edit — explicit select-all / collapse so batch editing
+            // doesn't depend on the List having keyboard focus.
+            if queue.jobs.count >= 2 {
+                if queue.selectedJobIDs.count == queue.jobs.count {
+                    Button("Select One") { queue.collapseSelectionToPrimary() }
+                        .controlSize(.small)
+                        .help("Back to a single clip — the top bar edits the defaults again.")
+                } else {
+                    Button("Select All") { queue.selectAllJobs() }
+                        .controlSize(.small)
+                        .help("Select every clip so the top bar edits them all (⇧⌘A).")
+                }
+            }
+
             if hasCompletedJobs {
                 Button("Clear Completed") {
                     queue.clearCompleted()
@@ -372,7 +223,9 @@ struct ContentView: View {
         // name at narrow window widths; the card layout renders every
         // field at full card width. Selection still binds to
         // `queue.selectedJobID` (drives the preview pane).
-        List(selection: $queue.selectedJobID) {
+        // Batch-edit — multi-select: the List binds the full selection
+        // set; `selectedJobID` stays the primary row the preview follows.
+        List(selection: $queue.selectedJobIDs) {
             ForEach(queue.jobs) { job in
                 VStack(spacing: 0) {
                     JobCardView(job: job, queue: queue)

@@ -49,6 +49,35 @@ final class AppSettings: ObservableObject {
         didSet { userDefaults.set(defaultHapChunks, forKey: Keys.defaultHapChunks) }
     }
 
+    // MARK: - Codec defaults beyond DXV/HAP (batch-edit / defaults parity)
+
+    /// Default output codec for new jobs. For the DXV/HAP family the
+    /// format itself stays owned by `defaultQuality` × `defaultAlpha`
+    /// (read `defaultJobSettings`, which normalises the `.dxv` payload);
+    /// this field is what lets ProRes / H.264 / HEVC / MJPEG be a default
+    /// too. JSON-persisted; missing/corrupt → the DXV path.
+    @Published var defaultOutputCodec: OutputCodec {
+        didSet {
+            if let data = try? JSONEncoder().encode(defaultOutputCodec) {
+                userDefaults.set(data, forKey: Keys.defaultOutputCodec)
+            }
+        }
+    }
+
+    /// Default container (only meaningful for H.264/HEVC, which allow .mp4).
+    @Published var defaultOutputContainer: OutputContainer {
+        didSet { userDefaults.set(defaultOutputContainer.rawValue, forKey: Keys.defaultOutputContainer) }
+    }
+
+    /// Default H.264/HEVC rate-control / keyframe / profile settings.
+    @Published var defaultVideoSettings: VideoEncodeSettings {
+        didSet {
+            if let data = try? JSONEncoder().encode(defaultVideoSettings) {
+                userDefaults.set(data, forKey: Keys.defaultVideoSettings)
+            }
+        }
+    }
+
     // MARK: - Resize defaults (v0.9.4-pending Phase C)
 
     /// Per-job resize-filter default applied to newly-created jobs.
@@ -269,6 +298,9 @@ final class AppSettings: ObservableObject {
         static let checkerboardScope           = "glenc.checkerboardScope"
         static let defaultAudioEnabled         = "glenc.defaultAudioEnabled"
         static let defaultAudioRate            = "glenc.defaultAudioRate"
+        static let defaultOutputCodec          = "glenc.defaultOutputCodec"
+        static let defaultOutputContainer      = "glenc.defaultOutputContainer"
+        static let defaultVideoSettings        = "glenc.defaultVideoSettings"
     }
 
     // MARK: - Init
@@ -288,6 +320,22 @@ final class AppSettings: ObservableObject {
         // to 1...64 defensively against a corrupt/out-of-range stored value.
         self.defaultHapChunks =
             min(64, max(1, (d.object(forKey: Keys.defaultHapChunks) as? Int) ?? 1))
+        self.defaultOutputCodec = {
+            if let data = d.data(forKey: Keys.defaultOutputCodec),
+               let decoded = try? JSONDecoder().decode(OutputCodec.self, from: data) {
+                return decoded
+            }
+            return .dxv(.dxt1)   // DXV path; payload normalised from tier × alpha
+        }()
+        self.defaultOutputContainer =
+            OutputContainer(rawValue: d.string(forKey: Keys.defaultOutputContainer) ?? "") ?? .mov
+        self.defaultVideoSettings = {
+            if let data = d.data(forKey: Keys.defaultVideoSettings),
+               let decoded = try? JSONDecoder().decode(VideoEncodeSettings.self, from: data) {
+                return decoded
+            }
+            return .default
+        }()
         self.defaultResizeQuality =
             ResizeQuality(rawValue: d.string(forKey: Keys.defaultResizeQuality) ?? "") ?? .auto
         // OutputSize is JSON-persisted (associated values). Missing OR
@@ -344,6 +392,9 @@ final class AppSettings: ObservableObject {
         defaultQuality = .normal
         defaultAlpha = .withoutAlpha
         defaultHapChunks = 1
+        defaultOutputCodec = .dxv(.dxt1)
+        defaultOutputContainer = .mov
+        defaultVideoSettings = .default
         defaultResizeQuality = .auto
         defaultOutputSize = .original
         defaultAspectMode = .letterbox
