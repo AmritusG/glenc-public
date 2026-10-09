@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-// vendored from AmritusG/glance @ e134a3a (v0.7.0), GlEnc's validated pin
 import Foundation
 
 /// HAP codec FourCC sniffer. The MOV-walking is identical to DXV's

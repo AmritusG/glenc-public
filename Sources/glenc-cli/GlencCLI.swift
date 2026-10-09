@@ -32,7 +32,7 @@ struct GlencCLI: AsyncParsableCommand {
         discussion: """
         Encodes one input video to one output file. DXV (DXD3) and HAP are
         the priority — the formats ffmpeg cannot produce. Validate output
-        independently (ffprobe FourCC + GlanceCore demux / libmpv decode);
+        independently (ffprobe FourCC + `dxvtool check` / an ffmpeg decode);
         do not trust this tool's own exit code as proof of correctness.
 
         Codec values:

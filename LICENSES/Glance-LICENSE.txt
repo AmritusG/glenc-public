@@ -1,0 +1,46 @@
+MIT License
+
+Copyright (c) 2026 Amrit Rosell
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-------------------------------------------------------------------------------
+
+This MIT license covers the original source of the glance project as published
+in this repository — in particular the GlanceCore and GlancePlayback libraries.
+
+Some files are under different licenses, each declared by an
+SPDX-License-Identifier header in the file itself and catalogued in
+THIRD-PARTY-NOTICES.md:
+
+  - FFmpeg libavcodec/dxv.c decoder ports — LGPL-2.1-or-later
+      Sources/GlanceCore/DXVPacketDecoder.swift
+      Sources/GlanceCore/DXVHQCgoDecoder.swift
+      Sources/GlanceCore/DXVHQOpcodeDecoder.swift
+  - liblzf port — BSD-2-Clause
+      Sources/GlanceCore/DXV1PacketDecoder.swift
+  - Vendored Google Snappy (C port) — BSD-3-Clause
+      Sources/SnappyC/
+
+Full license texts are in the LICENSES/ directory.
+
+NOTE: This LICENSE covers the project's published source. It does NOT address
+the licensing of the Glance.app target's runtime dependencies (notably the
+MPVKit / FFmpeg linkage), which is a separate, deferred concern and is not
+claimed to be resolved here.

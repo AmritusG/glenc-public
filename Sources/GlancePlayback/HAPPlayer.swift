@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-// vendored from AmritusG/glance @ e134a3a (v0.7.0), GlEnc's validated pin
 import Foundation
 import QuartzCore
 import GlanceCore
@@ -68,9 +67,76 @@ public final class HAPPlayer {
         }
     }
 
+    // MARK: - Audio (Stage B — mirrors DXVPlayer's A2 audio glue)
+
+    // NOTE (tech-debt): this AudioState enum, audioLengthMismatch, the
+    // init do/catch, setAudioState, and fallBackToWallClock are a
+    // deliberate mirror of DXVPlayer's A2 audio glue. The HEAVY logic is
+    // already shared (AudioClock, FrameClock.audioTimeSource/onSeek/
+    // onAudioUnavailable, the watchdog + fallback decision); only this
+    // thin per-player wiring is duplicated. Extracting it into a shared
+    // audio-master component (and migrating DXVPlayer onto it, re-
+    // validating DXV) is the clean future cleanup — not done here so
+    // DXVPlayer stays exactly as validated.
+
+    /// Stage B audio state (§5) — model data the consumer reads and
+    /// surfaces in the UI, NOT a log line. `.playing` when the clip's audio
+    /// track loaded and drives the clock; `.none` when there's no audio
+    /// track (video plays on the wall clock — never a silent drop, §1);
+    /// `.failed` when audio exists but setup/validation failed (video still
+    /// plays). Mirror of `DXVPlayer.AudioState`.
+    public enum AudioState: Equatable {
+        case playing(sampleRate: Double, channels: Int)
+        case none(reason: String)
+        case failed(reason: String)
+    }
+
+    /// Current audio state (§5). `.none`/`.failed` mean video is on the
+    /// wall-clock master.
+    public private(set) var audioState: AudioState = .none(reason: "uninitialized")
+
+    /// Fired on the main thread whenever `audioState` changes at runtime
+    /// (e.g. a play-time / never-prime fallback), so the consumer can update
+    /// its visible indicator. NOT fired for the init-time state.
+    public var onAudioStateChange: ((AudioState) -> Void)?
+
+    /// True when the audio track and video durations differ by more than one
+    /// frame, so the consumer can surface the mismatch. Set in init.
+    public private(set) var audioLengthMismatch: Bool = false
+
+    /// Stage D: audio output gain, LINEAR, clamped to [0, 1]. Default 1.0.
+    /// Stored as intent and forwarded to the AudioClock when present (a
+    /// harmless no-op on a no-audio player; the getter returns the stored
+    /// intent). GAIN ONLY — setting level/mute never stops, reschedules, or
+    /// re-anchors the audio node, and never moves the master-clock position:
+    /// a muted clip stays in perfect video sync, silent not stopped.
+    /// Mirror of `DXVPlayer`.
+    public var volume: Float {
+        get { _volume }
+        set {
+            _volume = min(1.0, max(0.0, newValue))
+            audioClock?.volume = _volume
+        }
+    }
+    /// Mute toggle, SEPARATE from `volume` so unmute restores the prior
+    /// level. Default false. Effective node gain = `isMuted ? 0 : volume`.
+    public var isMuted: Bool {
+        get { _isMuted }
+        set {
+            _isMuted = newValue
+            audioClock?.isMuted = _isMuted
+        }
+    }
+    private var _volume: Float = 1.0
+    private var _isMuted: Bool = false
+
     // MARK: - Internals
 
     private let fileHandle: FileHandle
+    /// Stage B audio engine (audio-master clock). nil when the clip has no
+    /// audio track or audio setup failed — video then runs on the FrameClock
+    /// wall clock unchanged. Touched only from main.
+    private var audioClock: AudioClock?
     private let queue = DispatchQueue(label: "com.amritus.glance.happlayer.decode", qos: .userInteractive)
 
     private let pendingLock = NSLock()
@@ -98,10 +164,72 @@ public final class HAPPlayer {
         self.clock.onFrameChange = { [weak self] frameIdx in
             self?.requestDecode(frame: frameIdx)
         }
+
+        // Stage B: attempt audio-master setup, mirroring DXVPlayer. Audio is
+        // the canonical clock; video follows it via `clock.audioTimeSource`.
+        // NEVER silent-drop (§1): a missing or failed audio track does NOT
+        // fail playback — video continues on the wall-clock master and the
+        // outcome is recorded as visible `audioState` (§5). The HAP decode/
+        // render byte path is untouched; audio is purely additive.
+        do {
+            let ac = try AudioClock(url: url, loops: clock.loops)
+            self.audioClock = ac
+            self.audioState = .playing(sampleRate: ac.sampleRate, channels: ac.channelCount)
+            // Flag an audio/video length mismatch (> 1 frame) for §5.
+            let videoDuration = Double(index.frames.count) / clock.frameRate
+            self.audioLengthMismatch = abs(ac.durationSeconds - videoDuration) > (1.0 / clock.frameRate)
+            // Single attach point: the clock reads the audio render position.
+            self.clock.audioTimeSource = { [weak ac] in ac?.currentSeconds() }
+            // Keep audio locked to video on every seek (and frame-step).
+            self.clock.onSeek = { [weak self] frame in
+                guard let self = self else { return }
+                self.audioClock?.seek(toSeconds: Double(frame) / self.clock.frameRate)
+            }
+            // Never-prime watchdog → fall back to the wall clock.
+            self.clock.onAudioUnavailable = { [weak self] in
+                self?.fallBackToWallClock(reason: "audio failed to start")
+            }
+        } catch AudioClockError.noAudioTrack {
+            self.audioClock = nil
+            self.audioState = .none(reason: "no audio track")
+        } catch {
+            self.audioClock = nil
+            self.audioState = .failed(reason: Self.audioFailureReason(error))
+        }
+    }
+
+    /// Short, human-readable reason for the degraded-audio model state.
+    private static func audioFailureReason(_ error: Error) -> String {
+        if let e = error as? AudioClockError { return e.description }
+        return error.localizedDescription
+    }
+
+    /// Update `audioState` and notify observers (§5). Use for runtime
+    /// transitions; init sets `audioState` directly (no observer wired yet).
+    private func setAudioState(_ newState: AudioState) {
+        audioState = newState
+        onAudioStateChange?(newState)
+    }
+
+    /// §1/§5: a runtime audio failure must NOT silently freeze video. Revert
+    /// the clock to the wall-clock master, tear down the dead engine, re-
+    /// anchor to the current frame (no backward jump), and surface the
+    /// degraded state. Idempotent. Main-thread only. Mirror of DXVPlayer.
+    private func fallBackToWallClock(reason: String) {
+        guard audioClock != nil else { return }
+        audioClock?.stop()
+        audioClock = nil
+        clock.audioTimeSource = nil
+        clock.onSeek = nil
+        clock.onAudioUnavailable = nil
+        clock.seek(to: clock.currentFrame)
+        setAudioState(.failed(reason: reason))
     }
 
     deinit {
         clock.stop()
+        // §4: explicit audio teardown — never rely on stop() having run.
+        audioClock?.stop()
         try? fileHandle.close()
     }
 
@@ -109,13 +237,53 @@ public final class HAPPlayer {
 
     public func play() {
         clock.start()
+        // Start audio; if the engine reports it could not start (§1), fall
+        // back to the wall clock so video never freezes. `?? true` means
+        // "no audio clock → OK".
+        let audioStarted = audioClock?.play() ?? true
         clock.play()
+        if audioClock != nil && !audioStarted {
+            fallBackToWallClock(reason: "audio engine failed to start")
+        }
     }
 
-    public func pause() { clock.pause() }
-    public func togglePause() { clock.togglePause() }
-    public func seek(to frame: Int) { clock.seek(to: frame) }
-    public func stop() { clock.stop() }
+    public func pause() {
+        clock.pause()
+        audioClock?.pause()
+    }
+
+    public func togglePause() {
+        // Route through play()/pause() so audio follows the same path.
+        if clock.isPaused { play() } else { pause() }
+    }
+
+    public func seek(to frame: Int) {
+        // Audio is repositioned via clock.onSeek (wired in init).
+        clock.seek(to: frame)
+    }
+
+    /// Step one frame, holding audio paused. A bare `clock.stepFrame` pauses
+    /// only the video clock, so the follow-on seek hits `AudioClock.seek`'s
+    /// isPlaying branch and resumes audio. Pausing the player first (audio +
+    /// clock) makes the seek re-anchor audio held. Use this, not
+    /// `clock.stepFrame`.
+    public func stepFrame(forward: Bool) {
+        pause()
+        let target = max(0, min(totalFrames - 1, currentFrame + (forward ? 1 : -1)))
+        seek(to: target)
+    }
+
+    /// Set loop state on both the video clock and (in lockstep) the audio
+    /// engine, so audio loops/holds with the video.
+    public func setLoops(_ on: Bool) {
+        clock.loops = on
+        audioClock?.setLoops(on)
+    }
+
+    public func stop() {
+        clock.stop()
+        audioClock?.stop()
+    }
 
     public var isPaused: Bool { clock.isPaused }
     public var currentFrame: Int { clock.currentFrame }

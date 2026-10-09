@@ -4,34 +4,13 @@ GlEnc's own source is licensed under the MIT License (see `LICENSE`). Some
 source files are ports of, or derived from, or clean-room implementations
 guided by, third-party projects. Each such file declares its license via an
 `SPDX-License-Identifier` header. This document catalogues the upstream
-provenance for attribution. It covers both GlEnc's own encoder-side source and
-the **vendored** GlanceCore / GlancePlayback libraries (see the "Vendored
-libraries" section at the end).
+provenance for attribution, and the licences of GlEnc's package dependencies
+(see "Dependencies" at the end).
 
----
-
-## LGPL-2.1-or-later — FFmpeg DXV ports/derivations
-
-**Files:**
-- `Sources/GlEncCore/DXVLZWriter.swift`
-- `Sources/GlEncCore/DXVHQOpcodeWriter.swift`
-- `Sources/GlEncCore/DXVHQCgoWriter.swift`
-
-**Upstream project:** FFmpeg — `libavcodec/dxvenc.c` and `libavcodec/dxv.c`.
-
-**Original copyright:**
-- `dxvenc.c` (DXT1 compress reference): Copyright (C) 2024 Emma Worley.
-- `dxv.c` (DXT5 LZ / opcode / cgo decode semantics): Copyright (C) 2015
-  Vittorio Giovara; Copyright (C) 2018 Paul B Mahol.
-
-**Upstream license:** LGPL-2.1-or-later (`LICENSES/LGPL-2.1.txt`).
-
-**Note:** `DXVLZWriter.compressDXT1` is a faithful Swift port of `dxvenc.c`
-(`dxv_compress_dxt1` + the `PUSH_OP` macro). `compressDXT5` and the two
-`DXVHQ*Writer` files are encoder-side derivations written by reading the
-corresponding `dxv.c` decoder routines (`dxv_decompress_dxt5`,
-`dxv_decompress_opcodes`, `dxv_decompress_cgo`). All three preserve the
-upstream LGPL-2.1-or-later license.
+Since v1.4.0 nothing in GlEnc or its dependency graph is LGPL / GPL: DXV is
+encoded and read by DXVKit (clean-room, MIT), the FFmpeg-derived DXV writers
+and the vendored GlanceCore / GlancePlayback copy (with its FFmpeg dxv.c
+decoder ports) are gone. Every licence in the graph is MIT, BSD or Apache-2.0.
 
 ---
 
@@ -114,59 +93,32 @@ an algorithm (not copyrightable). Attribution is provided for provenance.
 
 ---
 
-All other files under `Sources/` are GlEnc original work under the MIT License,
-including files that merely *call* the LGPL-licensed DXV writers — invoking
-LGPL code does not place the caller under the LGPL.
+All other files under `Sources/` are GlEnc original work under the MIT License.
 
 ---
 
-# Vendored libraries — GlanceCore + GlancePlayback
+# Dependencies (SwiftPM, resolved in Package.resolved)
 
-`Sources/GlanceCore/` (15 files) and `Sources/GlancePlayback/` (4 files) are
-vendored **from AmritusG/glance @ e134a3a (v0.7.0)** — GlEnc's prior pinned,
-byte-gate-validated revision. Most files are MIT (glance-original / open-spec
-implementations). The exceptions, distinct from GlEnc's own encoder-side DXV
-ports above, are the decoder-side ports below.
+| Package | Pin | Licence | Used for |
+|---|---|---|---|
+| AmritusG/dxvkit (DXVKit) | exact 1.0.0 | MIT | DXV3 encoding (all four variants) and DXV source reading |
+| AmritusG/glance (GlanceCore, GlancePlayback) | exact 0.17.1 | MIT; its vendored C Snappy (`SnappyC`, from andikleen/snappy-c) is BSD-3-Clause; its `DXV1PacketDecoder` (liblzf port) is BSD-2-Clause | HAP source decoding, DXV / HAP detection, the preview player |
+| apple/swift-argument-parser | from 1.3.0 | Apache-2.0 | `glenc-cli` argument parsing only |
+| apple/swift-system | (transitive, via swift-argument-parser) | Apache-2.0 | — |
 
-## LGPL-2.1-or-later — FFmpeg DXV *decoder* ports (vendored)
+GlEnc v1.3.0 and earlier also depended on lovetodream/swift-snappy (BSD-3,
+via an AmritusG fork) as a test oracle; v1.4.0 drops it (its `SnappyC` target
+collides by name with Glance's) and the tests carry their own Snappy decoder
+(`Tests/GlEncTests/SnappyDecodeOracle.swift`, written from Google's format
+description).
 
-**Files:**
-- `Sources/GlanceCore/DXVPacketDecoder.swift`
-- `Sources/GlanceCore/DXVHQCgoDecoder.swift`
-- `Sources/GlanceCore/DXVHQOpcodeDecoder.swift`
+---
 
-**Upstream project:** FFmpeg — `libavcodec/dxv.c`.
+# In this public mirror
 
-**Original copyright:** Copyright (C) 2015 Vittorio Giovara
-<vittorio.giovara@gmail.com>; Copyright (C) 2018 Paul B Mahol <onemda@gmail.com>.
-
-**Upstream license:** LGPL-2.1-or-later (`LICENSES/LGPL-2.1.txt`).
-
-**Note:** Faithful Swift ports of the DXV *decoder* routines
-(`dxv_decompress_dxt1`/`dxt5`, `dxv_decompress_opcodes`, `dxv_decompress_cgo`/
-`yo`). These are the decode counterparts to GlEnc's own encoder-side dxv ports;
-they inherit the same LGPL-2.1-or-later license. Vendored from
-AmritusG/glance @ e134a3a (v0.7.0).
-
-## BSD-2-Clause — liblzf port (vendored)
-
-**File:** `Sources/GlanceCore/DXV1PacketDecoder.swift`
-
-**Upstream project:** liblzf (LZF decompressor).
-
-**Original copyright:** Copyright (c) Marc Alexander Lehmann
-<schmorp@schmorp.de>.
-
-**Upstream license:** liblzf is dual-licensed BSD-2-Clause / GPL-2.0-or-later;
-this file **elects BSD-2-Clause** (`LICENSES/BSD-2-Clause.txt`). The 4-byte
-DXV1/DXV2 header parser additionally follows FFmpeg's `libavcodec/dxv.c`; the
-file as published is BSD-2-Clause. Vendored from AmritusG/glance @ e134a3a
-(v0.7.0).
-
-## MIT — vendored GlanceCore / GlancePlayback (the other 15)
-
-The remaining vendored files (BC4BC5Unpack, CPURender, DXVDemuxer, DXVDetector,
-DXVHQDecoder, DXVThumbnail, HAPDemuxer, HAPDetector, HAPHQDecoder,
-HAPPacketDecoder, HAPThumbnail; and GlancePlayback's DXVPlayer, DXVRenderer,
-FrameClock, HAPPlayer) are MIT — glance-original code and open-spec (DXV / HAP /
-BC4-BC5) implementations. Vendored from AmritusG/glance @ e134a3a (v0.7.0).
+DXVKit 1.0.0 (`Sources/CDXVKit`, `Sources/DXVKit`; MIT, `LICENSES/DXVKit-LICENSE.txt`) and
+Glance 0.17.1's GlanceCore, GlancePlayback and SnappyC (`Sources/GlanceCore`,
+`Sources/GlancePlayback`, `Sources/SnappyC`; MIT, `LICENSES/Glance-LICENSE.txt`; SnappyC
+BSD-3-Clause, `Sources/SnappyC/LICENSE`; GlanceCore's `DXV1PacketDecoder.swift` BSD-2-Clause,
+`LICENSES/BSD-2-Clause.txt`) are copied in as source, unchanged from those tagged releases,
+because their repositories are not public. Per-file licences are in the SPDX headers.
