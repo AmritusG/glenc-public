@@ -473,6 +473,69 @@ final class EncodeQueue: ObservableObject {
         }
     }
 
+    // MARK: - v1.5.0 (G1) — reset finished jobs for a re-run
+
+    /// Where `job` will be written, before collision handling: the fixed
+    /// output folder when that preference is set (and exists), else the
+    /// source's folder.
+    func plannedOutputURL(for job: EncodeJob) -> URL {
+        let location = AppSettings.shared.outputLocation
+        let fixedPath = AppSettings.shared.fixedOutputPath
+        if location == .fixed, !fixedPath.isEmpty,
+           FileManager.default.fileExists(atPath: fixedPath) {
+            return URL(fileURLWithPath: fixedPath).appendingPathComponent(job.outputName)
+        }
+        return job.defaultOutputURL
+    }
+
+    /// Output paths other queued / encoding jobs will write (standardized).
+    func claimedOutputPaths(excluding id: EncodeJob.ID) -> Set<String> {
+        Set(jobs.filter { $0.id != id && ($0.status == .queued || $0.status == .encoding) }
+                .map { plannedOutputURL(for: $0).standardizedFileURL.path })
+    }
+
+    /// Reset finished jobs (done / failed — failed includes cancelled and
+    /// skipped) among `ids` to queued, keeping their current settings, so
+    /// the next Encode runs them again. A collision-renamed output name
+    /// goes back to its base name (the re-run numbers it again); a manual
+    /// rename is kept; an auto name is refreshed. Queued and encoding jobs
+    /// are untouched. Returns how many were reset.
+    @discardableResult
+    func resetJobs<S: Sequence>(_ ids: S) -> Int where S.Element == EncodeJob.ID {
+        let targets = Set(ids)
+        var count = 0
+        var refresh: [EncodeJob.ID] = []
+        for i in jobs.indices where targets.contains(jobs[i].id) && jobs[i].isFinished {
+            jobs[i].status = .queued
+            jobs[i].progress = 0
+            jobs[i].errorMessage = nil
+            jobs[i].audioWarning = nil
+            jobs[i].outputURL = nil
+            jobs[i].previewSide = .source
+            jobs[i].isRerun = true
+            if let base = jobs[i].preCollisionName {
+                jobs[i].outputName = base
+                jobs[i].preCollisionName = nil
+                jobs[i].outputNameOverridden = false
+            }
+            if !jobs[i].outputNameOverridden { refresh.append(jobs[i].id) }
+            count += 1
+        }
+        for id in refresh { refreshAutoNameIfNeeded(jobID: id) }
+        return count
+    }
+
+    /// Reset the selected finished jobs (Queue ▸ Reset Selected).
+    @discardableResult
+    func resetSelected() -> Int { resetJobs(selectedJobIDs) }
+
+    /// Reset every finished job (Queue ▸ Reset All Finished).
+    @discardableResult
+    func resetAllFinished() -> Int { resetJobs(jobs.map(\.id)) }
+
+    var selectionHasFinished: Bool { selectedJobs.contains(where: \.isFinished) }
+    var hasFinished: Bool { jobs.contains(where: \.isFinished) }
+
     func clearCompleted() {
         jobs.removeAll { $0.status == .done || $0.status == .failed }
         // Batch-edit — drop removed rows from the selection.
@@ -689,27 +752,28 @@ final class EncodeQueue: ObservableObject {
         // folder (same-as-source — pre-Phase-7B-a behavior).
         // EncodeQueue is @MainActor, so AppSettings.shared reads are
         // in-context (no MainActor.run wrappers needed).
-        let location = AppSettings.shared.outputLocation
-        let fixedPath = AppSettings.shared.fixedOutputPath
-        let initialOutURL: URL
-        if location == .fixed,
-           !fixedPath.isEmpty,
-           FileManager.default.fileExists(atPath: fixedPath) {
-            initialOutURL = URL(fileURLWithPath: fixedPath)
-                .appendingPathComponent(snapshot.outputName)
-        } else {
-            initialOutURL = snapshot.defaultOutputURL
-        }
+        let initialOutURL = await MainActor.run { self.plannedOutputURL(for: snapshot) }
 
         // v0.9.2 Phase G — collision resolution at write-start.
         // TOCTOU-safe: each job in the sequential batch resolves
         // AFTER prior jobs have written, so same-named jobs end up
         // as (.mov, _2.mov, _3.mov, …) rather than racing for _2.
         let collisionPolicy = AppSettings.shared.collisionPolicy
-        let resolved = await resolveCollision(
-            initialOutURL: initialOutURL,
-            policy: collisionPolicy,
-            jobID: id)
+        // v1.5.0 (G1) — a re-run never prompts: first free `_N` against
+        // the disk AND the names other queued / encoding jobs will write.
+        let resolved: CollisionResolution
+        if snapshot.isRerun {
+            let claimed = await MainActor.run { self.claimedOutputPaths(excluding: id) }
+            resolved = .proceed(AutoNameEngine.firstFreeNumberedURL(initialOutURL) { url in
+                claimed.contains(url.standardizedFileURL.path)
+                    || FileManager.default.fileExists(atPath: url.path)
+            })
+        } else {
+            resolved = await resolveCollision(
+                initialOutURL: initialOutURL,
+                policy: collisionPolicy,
+                jobID: id)
+        }
         let outURL: URL
         switch resolved {
         case .proceed(let url):
@@ -743,6 +807,9 @@ final class EncodeQueue: ObservableObject {
         if outURL != initialOutURL {
             await MainActor.run {
                 if let i = self.jobs.firstIndex(where: { $0.id == id }) {
+                    if self.jobs[i].preCollisionName == nil {
+                        self.jobs[i].preCollisionName = self.jobs[i].outputName
+                    }
                     self.jobs[i].outputName = outURL.lastPathComponent
                     self.jobs[i].outputNameOverridden = true
                 }
@@ -754,6 +821,7 @@ final class EncodeQueue: ObservableObject {
                 self.jobs[i].status = .encoding
                 self.jobs[i].progress = 0
                 self.jobs[i].errorMessage = nil
+                self.jobs[i].isRerun = false
             }
         }
         print("[GlEnc] encoding: \(snapshot.sourceURL.path) → \(outURL.path)")

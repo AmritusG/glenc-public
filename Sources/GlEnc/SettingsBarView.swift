@@ -34,6 +34,12 @@ struct SettingsBarView: View {
         isBatch ? queue.selectedJobs.map(\.settings) : [queue.defaultSettings]
     }
 
+    /// v1.5.0 (G3) — "Original (W×H)" for the selected clips (batch), or
+    /// plain "Original" for the defaults for new files (no source yet).
+    private var originalLabel: String {
+        isBatch ? OutputSizeMenuItems.originalLabel(for: queue.selectedJobs) : "Original"
+    }
+
     private func apply(_ e: EncodeQueue.SettingsEdit) {
         queue.applyFromSettingsBar(e)
     }
@@ -113,23 +119,14 @@ struct SettingsBarView: View {
         return HStack(spacing: 16) {
             // ── Codec family ──
             barMenu(common(t, \.codecFamilyLabel) ?? "Mixed codecs") {
-                ForEach(QualityTier.allCases) { tier in
-                    Button(tier.label) { apply { s, _ in s.selectDXVTier(tier) } }
-                }
-                Divider()
-                Button("ProRes") { apply { s, alpha in s.selectProRes(sourceHasAlpha: alpha) } }
-                Button("H.264") { apply { s, _ in s.selectVideoCodec(.h264) } }
-                Button("HEVC") { apply { s, _ in s.selectVideoCodec(.hevc) } }
-                Button("Motion JPEG") { apply { s, _ in s.selectVideoCodec(.mjpeg) } }
+                CodecFamilyMenuItems(apply: apply)
             }
             .help(isBatch ? "Codec for the selected clips." : "Default codec for newly-dropped files.")
 
             // ── DXV/HAP alpha ──
             if !dxv.isEmpty {
                 barMenu((common(dxv, \.format.alphaMode)?.label ?? "Mixed alpha") + partial(dxv.count)) {
-                    ForEach(AlphaMode.allCases) { mode in
-                        Button(mode.label) { apply { s, _ in s.setAlpha(mode) } }
-                    }
+                    AlphaMenuItems(apply: apply)
                 }
                 .help("Alpha for the DXV/HAP clips.")
             }
@@ -138,9 +135,7 @@ struct SettingsBarView: View {
             if !prores.isEmpty {
                 barMenu((common(prores, { $0.outputCodec.proResVariant ?? .proRes422 })?.label ?? "Mixed variant")
                         + partial(prores.count)) {
-                    ForEach(ProResVariant.allCases, id: \.self) { v in
-                        Button(v.label) { apply { s, _ in s.setProResVariant(v) } }
-                    }
+                    ProResVariantMenuItems(apply: apply)
                 }
                 .help("ProRes variant for the ProRes clips.")
             }
@@ -149,9 +144,7 @@ struct SettingsBarView: View {
             if !video.isEmpty {
                 barMenu((common(video, \.outputContainer)?.label ?? "Mixed container")
                         + partial(video.count)) {
-                    ForEach(OutputContainer.allCases, id: \.self) { c in
-                        Button(c.label) { apply { s, _ in s.setContainer(c) } }
-                    }
+                    ContainerMenuItems(apply: apply)
                 }
                 .help("Container for the H.264/HEVC clips.")
 
@@ -215,20 +208,12 @@ struct SettingsBarView: View {
         let enabled = common(t, \.audioEnabled)
         return HStack(spacing: 16) {
             barMenu(enabled.map { $0 ? "Audio: On" : "Audio: Off" } ?? "Audio: Mixed") {
-                Button("Audio: On") { apply { s, _ in s.setAudioEnabled(true) } }
-                Button("Audio: Off (strip)") { apply { s, _ in s.setAudioEnabled(false) } }
+                AudioEnabledMenuItems(apply: apply)
             }
             .help("Clips without an audio track are unaffected.")
 
             barMenu(common(t, \.audioRate)?.label ?? "Mixed rate") {
-                ForEach(AudioRate.allCases, id: \.self) { r in
-                    Button(r.label) { apply { s, _ in s.setAudioRate(r) } }
-                        .disabled(t.allSatisfy { $0.audioRateUnavailable(r) })
-                }
-                if t.contains(where: { $0.outputContainer.usesAACAudio }) {
-                    Divider()
-                    Text("MPEG-4 (AAC) caps at 48 kHz")
-                }
+                AudioRateMenuItems(targets: t, apply: apply)
             }
             .disabled(enabled == false)
             Spacer()
@@ -242,26 +227,23 @@ struct SettingsBarView: View {
         let t = targets
         let allOriginal = t.allSatisfy(\.isOriginalSize)
         return HStack(spacing: 16) {
-            barMenu("Size: " + (common(t, \.outputSize).map(OutputSizeMenuItems.label) ?? "Mixed")) {
+            barMenu("Size: " + (common(t, \.outputSize).map { OutputSizeMenuItems.label($0, original: originalLabel) } ?? "Mixed")) {
                 OutputSizeMenuItems(
                     settings: settings,
+                    originalLabel: originalLabel,
                     onSelect: { size in apply { s, _ in s.setOutputSize(size) } },
                     onCustom: { showingCustomSheet = true },
                     onManage: { showingManageSheet = true })
             }
 
             barMenu("Quality: " + (common(t, \.resizeQuality)?.displayLabel ?? "Mixed")) {
-                ForEach(ResizeQuality.allCases, id: \.self) { q in
-                    Button(q.displayLabel) { apply { s, _ in s.setResizeQuality(q) } }
-                }
+                ResizeQualityMenuItems(apply: apply)
             }
             .disabled(allOriginal)
             .help("Auto picks Lanczos for downscale, Bilinear for upscale. Auto is NOT content-aware — pick Nearest for pixel-art / hard-edge content.")
 
             barMenu("Aspect: " + (common(t, \.aspectMode)?.displayLabel ?? "Mixed")) {
-                ForEach(AspectMode.allCases, id: \.self) { m in
-                    Button(m.displayLabel) { apply { s, _ in s.setAspectMode(m) } }
-                }
+                AspectMenuItems(apply: apply)
             }
             .disabled(allOriginal)
             .help("Fit (letterbox): preserve source aspect, fill remainder with black bars. Distort: stretch to target dims. No effect when source aspect already matches output.")

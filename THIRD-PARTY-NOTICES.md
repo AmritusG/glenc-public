@@ -33,19 +33,15 @@ public-domain code by Fabian Giesen, Sean Barrett, and Yann Collet.
 
 ## MIT — clean-room block-encoder refinements
 
-**Files:**
-- `Sources/GlEncCore/BC1BlockEncoderClusterFit.swift`
-- `Sources/GlEncCore/BC4AlphaBlockEncoderRefined.swift`
+**File:** `Sources/GlEncCore/BC4AlphaBlockEncoderRefined.swift`
 
-**Upstream references:**
-- libsquish (Simon Brown / Ignacio Castaño) — ClusterFit BC1 endpoint search.
-- `rgbcx` / `bc7enc_rdo` (Rich Geldreich) — BC4 endpoint refinement.
+**Upstream reference:** `rgbcx` / `bc7enc_rdo` (Rich Geldreich) — BC4 endpoint
+refinement.
 
-**Upstream license:** MIT (libsquish); MIT or Public Domain (rgbcx/bc7enc_rdo)
-— `LICENSES/MIT.txt`.
+**Upstream license:** MIT or Public Domain (rgbcx/bc7enc_rdo) — `LICENSES/MIT.txt`.
 
-**Note:** These are clean-room Swift implementations written from the algorithm
-descriptions; algorithms are not copyrightable. Attribution is provided as a
+**Note:** A clean-room Swift implementation written from the algorithm
+description; algorithms are not copyrightable. Attribution is provided as a
 courtesy.
 
 ---

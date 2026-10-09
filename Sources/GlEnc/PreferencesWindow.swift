@@ -10,13 +10,12 @@ import GlEncCore
 struct PreferencesWindow: View {
     @ObservedObject private var settings: AppSettings = .shared
 
-    // v0.9.2 Phase G.1: mirrors of the two GlEncCore static config
-    // flags (BC1Config.useClusterFit / BC4Config.useRefinement),
+    // v0.9.2 Phase G.1: mirror of the GlEncCore static config flag
+    // BC4Config.useRefinement (v1.5.0: the ClusterFit BC1 toggle is gone),
     // relocated from ContentView. Session-only — these are NOT
     // persisted in AppSettings (the underlying flags are GlEncCore
     // globals that reset to their defaults each app launch, and
     // adding persistence is a separate scope decision).
-    @State private var clusterFitEnabled: Bool = BC1Config.useClusterFit
     @State private var refinedBC4Enabled: Bool = BC4Config.useRefinement
 
     var body: some View {
@@ -199,14 +198,6 @@ struct PreferencesWindow: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Advanced")
                 .font(.headline)
-            Toggle("Experimental: ClusterFit BC1 endpoint search",
-                   isOn: $clusterFitEnabled)
-                .onChange(of: clusterFitEnabled) { _, newValue in
-                    BC1Config.useClusterFit = newValue
-                }
-            Text("HAP only (Hap1, Hap5, HapY, HapM). DXV is encoded by DXVKit at its best setting. Significant encode slowdown (4–12×).")
-                .font(.caption)
-                .foregroundColor(.secondary)
             Toggle("Experimental: Refined BC4 endpoint search",
                    isOn: $refinedBC4Enabled)
                 .onChange(of: refinedBC4Enabled) { _, newValue in
