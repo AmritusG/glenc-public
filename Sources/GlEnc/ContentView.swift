@@ -8,10 +8,10 @@ struct ContentView: View {
     @EnvironmentObject var queue: EncodeQueue
     @State private var isTargeted = false
     // v0.9.2 Phase G.1: the Advanced section's @State properties
-    // (clusterFitEnabled, refinedBC4Enabled) and its DisclosureGroup
+    // (refinedBC4Enabled; v1.5.0 dropped ClusterFit) and its DisclosureGroup
     // body relocated to PreferencesWindow.advancedSection. Same
-    // session-only behavior (toggles BC1Config.useClusterFit /
-    // BC4Config.useRefinement on the GlEncCore globals; no
+    // session-only behavior (toggles BC4Config.useRefinement on the
+    // GlEncCore global; no
     // persistence). Lives in Preferences instead of cluttering the
     // queue column.
 
@@ -178,6 +178,14 @@ struct ContentView: View {
             }
 
             if hasCompletedJobs {
+                // v1.5.0 (G1) — queue finished clips again (re-run names
+                // collide-free as <name>_2, _3, …). ⇧⌘R.
+                Button("Reset Finished") {
+                    queue.resetAllFinished()
+                }
+                .controlSize(.small)
+                .disabled(queue.isEncoding)
+                .help("Queue every finished clip again with its current settings (⇧⌘R). Existing outputs are kept; re-runs write name_2, name_3, …")
                 Button("Clear Completed") {
                     queue.clearCompleted()
                 }
@@ -239,6 +247,12 @@ struct ContentView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        // v1.5.0 (G1/G2) — right-click on a clip (or the selection).
+        .contextMenu(forSelectionType: EncodeJob.ID.self) { ids in
+            Button("Reset for Re-run") { queue.resetJobs(ids) }
+                .disabled(queue.isEncoding
+                          || !queue.jobs.contains { ids.contains($0.id) && $0.isFinished })
+        }
     }
 
     // MARK: - Drop handling

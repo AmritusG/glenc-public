@@ -17,3 +17,4 @@ DerivedData/
 
 # Reproducible chunked-HAP fixtures (mint locally via glenc-cli --chunks)
 /fixtures/chunked/
+*.dmg.sha256

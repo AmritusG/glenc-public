@@ -531,30 +531,22 @@ func bc1RefineColors(_ block: UnsafePointer<UInt8>,
 ///   of the tile are at `block`, `block+stride`, `block+2*stride`, `block+3*stride`.
 /// - `dst`: 8-byte output. Layout: `[max16 LE][min16 LE][indices LE32]`.
 ///
-/// Dispatches to one of two algorithms based on `BC1Config.useClusterFit`:
-///   - `true` (default, v0.5.0+): Squish-style ClusterFit endpoint search.
-///     Higher fidelity to source. See `BC1BlockEncoderClusterFit.swift`.
-///   - `false` (legacy, v0.2.0 contract): FFmpeg byte-identical PCA + 1×
-///     refine. The Phase 2A development contract — produces output
-///     bit-identical to `ffmpeg -c:v dxv -format dxt1`. Kept for A/B
-///     testing and as a safety fallback.
+/// The texturedspenc.c (MIT) PCA endpoint search + refine. v1.5.0: the
+/// only BC1 encoder (HAP colour: Hap1, Hap5, HapY, HapM). The experimental
+/// ClusterFit alternative is gone: after its three-colour-mode bug was
+/// fixed it still lost on the W3 testsrc2 source (−0.18 dB at +3.6 %
+/// bytes) and was 16–21× slower (docs/requests-and-fixes/hap-ab-*.txt).
 @inlinable
 public func encodeBC1Block(
     block: UnsafePointer<UInt8>,
     stride: Int,
     dst: UnsafeMutablePointer<UInt8>
 ) {
-    if BC1Config.useClusterFit {
-        encodeBC1BlockClusterFit(block: block, stride: stride, dst: dst)
-    } else {
-        encodeBC1BlockFFmpeg(block: block, stride: stride, dst: dst)
-    }
+    encodeBC1BlockFFmpeg(block: block, stride: stride, dst: dst)
 }
 
-/// FFmpeg `texturedspenc.c` BC1 endpoint search — the v0.2.0 development
-/// contract. Byte-identical to `ffmpeg -c:v dxv -format dxt1`. Retired
-/// from the default encoder path in v0.5.0 in favor of ClusterFit, but
-/// kept callable for legacy byte-identity tests.
+/// FFmpeg `texturedspenc.c` BC1 endpoint search (MIT port) — byte-identical
+/// to `ffmpeg -c:v dxv -format dxt1`'s BC1 blocks.
 @inlinable
 public func encodeBC1BlockFFmpeg(
     block: UnsafePointer<UInt8>,

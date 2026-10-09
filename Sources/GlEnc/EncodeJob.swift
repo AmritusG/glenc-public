@@ -186,6 +186,32 @@ struct EncodeJob: Identifiable, Equatable {
     /// at Phase C the field is data-model-only.
     var outputSize: OutputSize = .original
 
+    /// v1.5.0 (G1) — set by `EncodeQueue.resetJobs` when a finished job is
+    /// queued again. A re-run never prompts on a name collision: it writes
+    /// the first free `<name>_N.<ext>` (N ≥ 2) when the name exists on disk
+    /// or is claimed by another queued job. Cleared when the encode starts.
+    var isRerun: Bool = false
+
+    /// v1.5.0 (G1) — the output name before a collision rename changed it
+    /// (e.g. "clip.mov" when the run wrote "clip_2.mov"), so a reset goes
+    /// back to the base name instead of numbering "clip_2_2.mov".
+    var preCollisionName: String? = nil
+
+    /// v1.5.0 (G3) — the size an `.original` output encodes at: the crop
+    /// rect when one is set (EncodePipeline encodes `.original` at the
+    /// cropped size), else the probed source size. Nil until probed.
+    var effectiveSourceSize: (width: Int, height: Int)? {
+        if let c = cropRect, c.width > 0, c.height > 0 {
+            return (Int(c.width.rounded()), Int(c.height.rounded()))
+        }
+        guard let w = sourceWidth, let h = sourceHeight else { return nil }
+        return (w, h)
+    }
+
+    /// v1.5.0 (G1) — a job that has run (done / failed, which includes
+    /// cancelled and skipped) and can be reset to queued.
+    var isFinished: Bool { status == .done || status == .failed }
+
     /// Resize Release Phase C — per-job resize-filter choice. `.auto`
     /// resolves at frame-time by scale direction (downscale → Lanczos,
     /// upscale → bilinear). Set by the per-row Quality menu (Phase F

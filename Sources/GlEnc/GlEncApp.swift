@@ -104,6 +104,38 @@ struct GlEncApp: App {
                 .keyboardShortcut("a", modifiers: [.command, .shift])
                 .disabled(queue.jobs.isEmpty)
         }
+        // v1.5.0 (G2) — Queue menu: reset finished clips for a re-run and
+        // change settings for the selection or every clip from the menu
+        // bar. The Change submenus are the settings bar's own items
+        // (SettingsMenuItems.swift) routed through `applySettings`.
+        CommandMenu("Queue") {
+            Button("Reset Selected") { queue.resetSelected() }
+                .keyboardShortcut("r", modifiers: [.command])
+                .disabled(queue.isEncoding || !queue.selectionHasFinished)
+            Button("Reset All Finished") { queue.resetAllFinished() }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(queue.isEncoding || !queue.hasFinished)
+            Divider()
+            Button("Select Finished Clips") {
+                queue.selectedJobIDs = Set(queue.jobs.filter(\.isFinished).map(\.id))
+            }
+            .keyboardShortcut("a", modifiers: [.command, .option])
+            .disabled(!queue.hasFinished)
+            Divider()
+            Menu("Change Selected Clips") {
+                QueueSettingsSubmenus(queue: queue, settings: settings,
+                                      ids: queue.selectedJobs.map(\.id))
+            }
+            .disabled(queue.selectedJobIDs.isEmpty)
+            Menu("Change All Clips") {
+                QueueSettingsSubmenus(queue: queue, settings: settings,
+                                      ids: queue.jobs.map(\.id))
+            }
+            .disabled(queue.jobs.isEmpty)
+            Divider()
+            Button("Encode Queue") { queue.encodeAll() }
+                .disabled(queue.isEncoding || !queue.jobs.contains { $0.status == .queued })
+        }
     }
 
     @ToolbarContentBuilder

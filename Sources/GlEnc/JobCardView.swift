@@ -523,6 +523,7 @@ struct JobCardView: View {
             Menu {
                 OutputSizeMenuItems(
                     settings: settings,
+                    originalLabel: OutputSizeMenuItems.originalLabel(for: [job]),
                     onSelect: { outputSizeBinding.wrappedValue = $0 },
                     onCustom: { showingCustomSheet = true },
                     onManage: { showingManageSheet = true })
@@ -592,7 +593,8 @@ struct JobCardView: View {
 
     /// Compact label for the Output Size menu's collapsed view.
     private var outputSizeMenuLabel: String {
-        OutputSizeMenuItems.label(job.outputSize)
+        OutputSizeMenuItems.label(job.outputSize,
+                                  original: OutputSizeMenuItems.originalLabel(for: [job]))
     }
 
     private var isOriginalSize: Bool {

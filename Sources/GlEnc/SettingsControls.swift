@@ -100,12 +100,17 @@ struct VideoAdvancedControls: View {
 /// sections, Custom…, Manage Sizes…. Used inside a `Menu { }`.
 struct OutputSizeMenuItems: View {
     @ObservedObject var settings: AppSettings
+    /// v1.5.0 (G3) — the Original item's text: "Original (1920×1080)",
+    /// "Original (mixed)" or plain "Original" (see `originalLabel(for:)`).
+    var originalLabel: String = "Original"
     let onSelect: (OutputSize) -> Void
-    let onCustom: () -> Void
-    let onManage: () -> Void
+    /// Custom… / Manage Sizes… open sheets; nil hides them (the menu bar's
+    /// Queue ▸ Change … ▸ Size has no sheet to open).
+    var onCustom: (() -> Void)? = nil
+    var onManage: (() -> Void)? = nil
 
     var body: some View {
-        Button("Original") { onSelect(.original) }
+        Button(originalLabel) { onSelect(.original) }
         // Phase H — user-named presets at the top of the menu (per
         // RESIZE_PLAN.md Q5). Only when non-empty.
         if !settings.customPresets.isEmpty {
@@ -137,10 +142,12 @@ struct OutputSizeMenuItems: View {
             preset(.v_1080_1920)
             preset(.v_1440_2560)
         }
-        Divider()
-        Button("Custom…") { onCustom() }
+        if let onCustom {
+            Divider()
+            Button("Custom…") { onCustom() }
+        }
         // Phase H — Manage Sizes only when there's something to manage.
-        if !settings.customPresets.isEmpty {
+        if let onManage, !settings.customPresets.isEmpty {
             Button("Manage Sizes…") { onManage() }
         }
     }
@@ -151,16 +158,30 @@ struct OutputSizeMenuItems: View {
 
     /// Compact collapsed-menu label ("1920×1080" rather than the full
     /// preset displayLabel).
-    static func label(_ size: OutputSize) -> String {
+    static func label(_ size: OutputSize, original: String = "Original") -> String {
         switch size {
         case .original:
-            return "Original"
+            return original
         case .preset(let p):
             let (w, h) = p.dimensions
             return "\(w)×\(h)"
         case .custom(let w, let h):
             return "Custom \(w)×\(h)"
         }
+    }
+}
+
+extension OutputSizeMenuItems {
+    /// v1.5.0 (G3) — "Original (W×H)" with the size `.original` encodes at
+    /// (`EncodeJob.effectiveSourceSize`: the crop rect when cropped, else
+    /// the probed source). Several jobs: their common size, or
+    /// "Original (mixed)" when they differ. No job, or none probed yet:
+    /// plain "Original" (the defaults for new files have no source).
+    static func originalLabel(for jobs: [EncodeJob]) -> String {
+        let sizes = jobs.compactMap(\.effectiveSourceSize)
+        guard let first = sizes.first else { return "Original" }
+        if sizes.contains(where: { $0 != first }) { return "Original (mixed)" }
+        return "Original (\(first.width)×\(first.height))"
     }
 }
 

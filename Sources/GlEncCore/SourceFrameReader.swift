@@ -183,25 +183,34 @@ public final class AVAssetReaderSourceReader: SourceFrameReader {
 
         let w = Int(naturalSize.width.rounded())
         let h = Int(naturalSize.height.rounded())
-        // #14 part 1 — rational frame-rate read. `nominalFrameRate` is a
-        // Float computed by AVFoundation; for a clean integer-rate H.264
-        // it comes back as e.g. 29.999998 instead of 30, which then trips
-        // VariantMOVWriter's integer-fps precondition. `minFrameDuration`
-        // is the exact rational frame period (CMTime); deriving the rate
-        // from it (timescale / value) recovers the true rate exactly —
-        // 30/1 → 30.0, while a genuine 29.97 stays 30000/1001 ≈ 29.97003
-        // (still non-integer; that's part 2's rational-timescale writer).
-        // Fall back to the nominal float only when minFrameDuration is
-        // unavailable/degenerate. For inputs that already read correctly
-        // (e.g. ProRes 30 → nominal 30.0), the rational yields the same
-        // value, so the writer-bound fps is unchanged for them.
-        let fps: Double
-        if minFrameDuration.isValid, minFrameDuration.isNumeric,
-           minFrameDuration.value > 0, minFrameDuration.timescale > 0 {
-            fps = Double(minFrameDuration.timescale) / Double(minFrameDuration.value)
-        } else {
-            fps = Double(nominalFrameRate)
+        // v1.5.0 — the rate comes from the track's sample timing
+        // (FrameRateResolver): sample count / duration, then the dominant
+        // sample delta, snapped to the exact standard rational; else the
+        // #14 part-1 rule (minFrameDuration, then nominalFrameRate).
+        // minFrameDuration alone is the SHORTEST sample: a 25 fps clip with
+        // jittered 23/25-tick samples read as 26.09 fps and was refused.
+        var durations: [Int64] = []
+        var sampleTimescale: Int32 = 0
+        if (try? await videoTrack.load(.canProvideSampleCursors)) == true,
+           let cursor = videoTrack.makeSampleCursorAtFirstSampleInDecodeOrder() {
+            repeat {
+                let d = cursor.currentSampleDuration
+                if d.isValid, d.isNumeric {
+                    durations.append(d.value)
+                    sampleTimescale = d.timescale
+                }
+            } while cursor.stepInDecodeOrder(byCount: 1) == 1
         }
+        let trackRange = try await videoTrack.load(.timeRange)
+        let trackSec = CMTimeGetSeconds(trackRange.duration)
+        let mfd: (value: Int64, timescale: Int32)? =
+            (minFrameDuration.isValid && minFrameDuration.isNumeric)
+            ? (minFrameDuration.value, minFrameDuration.timescale) : nil
+        let resolved = FrameRateResolver.resolve(
+            sampleDurations: durations, timescale: sampleTimescale,
+            trackDuration: trackSec.isFinite ? trackSec : 0,
+            minFrameDuration: mfd, nominalFrameRate: nominalFrameRate)
+        let fps = resolved.fps
         let durSec = CMTimeGetSeconds(assetDuration)
         // Hardening Fix-Brief 1 — validate geometry/scalars at the reader
         // trust boundary, before the AVAssetReader is created and before
@@ -212,7 +221,8 @@ public final class AVAssetReaderSourceReader: SourceFrameReader {
         FileHandle.standardError.write(Data(
             ("[GlEnc/fps] nominalFrameRate=\(nominalFrameRate) " +
              "minFrameDuration=\(minFrameDuration.value)/\(minFrameDuration.timescale) " +
-             "derivedRationalFPS=\(fps) writerFPS=\(fps)\n").utf8))
+             "samples=\(durations.count) trackDuration=\(trackSec) " +
+             "fps=\(fps) (from \(resolved.source.rawValue))\n").utf8))
 
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(

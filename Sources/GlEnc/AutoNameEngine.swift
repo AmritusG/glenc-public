@@ -262,6 +262,24 @@ enum AutoNameEngine {
         return dir.appendingPathComponent(nextName)
     }
 
+    /// v1.5.0 (G1) — `url` if it is free, else the first free
+    /// `<stem>_N.<ext>` for N = 2, 3, … (gaps are filled: with `_2` and `_4`
+    /// taken, `_3` is used). `isTaken` decides (disk + other queued jobs).
+    /// Differs from `collisionFreeURL` (max-N + 1, the Auto-rename
+    /// collision policy), which is unchanged.
+    static func firstFreeNumberedURL(_ url: URL, isTaken: (URL) -> Bool) -> URL {
+        guard isTaken(url) else { return url }
+        let stem = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        let dir = url.deletingLastPathComponent()
+        var n = 2
+        while true {
+            let candidate = dir.appendingPathComponent(ext.isEmpty ? "\(stem)_\(n)" : "\(stem)_\(n).\(ext)")
+            if !isTaken(candidate) { return candidate }
+            n += 1
+        }
+    }
+
     /// Mirror of `DXVFormat.tier` mapped to the user-visible string.
     /// Kept in this engine rather than added to `DXVFormat` so the
     /// label-string surface stays GlEnc-side (could change for

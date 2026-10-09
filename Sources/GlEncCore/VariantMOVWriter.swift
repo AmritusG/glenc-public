@@ -145,8 +145,8 @@ public final class VariantMOVWriter {
         precondition(presentationWidth > 0 && presentationWidth <= Int(UInt16.max))
         precondition(presentationHeight > 0 && presentationHeight <= Int(UInt16.max))
         // #14 part 2 — resolve (mediaTimescale, sampleDelta). Integer
-        // rates keep ffmpeg's ×512 basis byte-identically; the two NTSC
-        // rates (29.97, 23.976) take the (N×1000, 1001) basis. Anything
+        // rates keep ffmpeg's ×512 basis byte-identically; the NTSC rates
+        // (29.97, 23.976, 59.94) take the (N×1000, 1001) basis. Anything
         // else still throws nonIntegerFPS.
         let (resolvedTimescale, resolvedDelta) = try Self.deriveTimescale(fps: fps)
         // codecFourCC must be exactly 4 ASCII bytes — MOV's sample
@@ -207,22 +207,23 @@ public final class VariantMOVWriter {
     ///     byte-for-byte (the only change is expressing it via this
     ///     pair).
     ///   - 29.97 (N=30) → `(30000, 1001)`; 23.976 (N=24) → `(24000,
-    ///     1001)`. The NTSC `(N×1000, 1001)` basis, confirmed against
-    ///     ffmpeg's DXV output.
+    ///     1001)`; 59.94 (N=60) → `(60000, 1001)` (v1.5.0). The NTSC
+    ///     `(N×1000, 1001)` basis, confirmed against ffmpeg's DXV output.
     /// ε is deliberately tiny: part 1 derives the rate from the track's
     /// exact `minFrameDuration`, so a true NTSC source arrives as
     /// `Double(N*1000)/Double(1001)` and the residual is ~0. The nearest
     /// rejected rate, 29.5, sits |29.5 − 30000/1001| ≈ 0.47 away — many
     /// orders of magnitude beyond ε, so it cannot false-match. Only the
-    /// two validated NTSC rates are accepted; 59.94/119.88 are
-    /// deliberately NOT included (unvalidated output).
+    /// three validated NTSC rates are accepted (59.94 validated in v1.5.0:
+    /// ffprobe, Resolume Arena, Glance); 47.952 / 119.88 are deliberately
+    /// NOT included (unvalidated output).
     static func deriveTimescale(fps: Double) throws -> (UInt32, UInt32) {
         let n = fps.rounded()
         if abs(fps - n) < 1e-6 {
             return (UInt32(n) * ticksPerFrame, ticksPerFrame)
         }
         let eps = 1e-6
-        for nN in [30, 24] {
+        for nN in [30, 24, 60] {
             let ntsc = Double(nN) * 1000.0 / 1001.0
             if abs(fps - ntsc) < eps {
                 return (UInt32(nN) * 1000, 1001)
