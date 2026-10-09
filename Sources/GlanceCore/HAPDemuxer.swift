@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-// vendored from AmritusG/glance @ e134a3a (v0.7.0), GlEnc's validated pin
 import Foundation
 
 /// One HAP frame's location in a MOV file. `fileOffset` and `size`

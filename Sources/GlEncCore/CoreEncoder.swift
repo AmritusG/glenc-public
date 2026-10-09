@@ -103,10 +103,12 @@ public enum CoreEncoder {
         chunks: Int = 1
     ) -> (encoder: FrameEncoder, sourceAlphaInfo: CGImageAlphaInfo) {
         switch format {
-        case .dxt1: return (DXT1Encoder(),               .noneSkipLast)
-        case .dxt5: return (DXT5Encoder(),               .last)
-        case .ycg6: return (YCG6Encoder(),               .noneSkipLast)
-        case .yg10: return (YG10Encoder(),               .last)
+        // DXV3: DXVKit's encoder (DXVKitFrameEncoder); the init only throws
+        // for a non-DXV3 format, which these four cases are not.
+        case .dxt1: return (try! DXVKitFrameEncoder(format: .dxt1), .noneSkipLast)
+        case .dxt5: return (try! DXVKitFrameEncoder(format: .dxt5), .last)
+        case .ycg6: return (try! DXVKitFrameEncoder(format: .ycg6), .noneSkipLast)
+        case .yg10: return (try! DXVKitFrameEncoder(format: .yg10), .last)
         case .hap1: return (HapFrameEncoder(codec: .hap1, chunks: chunks), .noneSkipLast)
         case .hap5: return (HapFrameEncoder(codec: .hap5, chunks: chunks), .last)
         case .hapY: return (HapFrameEncoder(codec: .hapY, chunks: chunks), .noneSkipLast)

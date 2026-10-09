@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-// vendored from AmritusG/glance @ e134a3a (v0.7.0), GlEnc's validated pin
 import Foundation
 
 /// BC4/BC5 block decompression for HQ DXV variants.
@@ -16,8 +15,10 @@ import Foundation
 /// interleaved at 16 bytes/block), and for YG10's luma+alpha pair.
 ///
 /// HQ variants use BC4 for the luma (Y) plane and BC5 for chroma (Co+Cg)
-/// and luma+alpha pairs. Both have FFmpeg reference implementations
-/// in libavcodec/texturedsp.c.
+/// and luma+alpha pairs. These are the standard BC4 / BC5 (RGTC1 / RGTC2)
+/// block formats. Used where 8-bit planes are needed on the CPU (the
+/// plane-level `DXVHQDecoder` API, `DXVHQFrame`'s plane accessors, HAP
+/// alpha); playback uploads the blocks to the GPU instead.
 public enum BC4BC5Unpack {
 
     /// Unpack a single BC4 8-byte block to a 4x4 array of UInt8.

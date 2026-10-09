@@ -5,7 +5,7 @@ source video and encode it to the formats Resolume and other realtime tools
 prefer — including byte-accurate Resolume **DXV3** output — with a queue-based
 GUI, per-job trim/crop/resize/rename, live preview, and audio pass-through.
 
-Version **1.3.0**. Requires **macOS 14 (Sonoma) or later**.
+Version **1.4.0**. Requires **macOS 14 (Sonoma) or later**.
 
 ## Download
 
@@ -15,7 +15,7 @@ Prefer a ready-to-run app over building from source? Download the signed, notari
 
 | Family | Variants | Notes |
 |---|---|---|
-| **DXV3** | DXT1, DXT5, YCG6 (HQ), YG10 (HQ + alpha) | Hand-rolled MOV writer; DXT1 output is byte-identical to FFmpeg's `dxv` encoder |
+| **DXV3** | DXT1, DXT5, YCG6 (HQ), YG10 (HQ + alpha) | Encoded by [DXVKit](#license) (clean-room, MIT); GlEnc's own MOV writer (audio, >4 GB, NTSC rates) |
 | **HAP** | Hap1, Hap5, HapY, HapM (HAP + alpha) | From-scratch Snappy + HAP section writer |
 | **ProRes** | 422, 422 HQ, LT, Proxy, 4444 | 4444 carries source alpha through |
 | **H.264 / HEVC** | — | VideoToolbox; rate-control, keyframe interval, profile; `.mp4`/`.mov` |
@@ -71,10 +71,12 @@ GlEnc's own source is released under the **MIT License** (see [`LICENSE`](./LICE
 Some files carry other terms, declared per-file via `SPDX-License-Identifier`
 headers:
 
-- The DXV3 LZ / opcode / cgo writers are Swift ports/derivations of FFmpeg's
-  `dxvenc.c` / `dxv.c` and are **LGPL-2.1-or-later**.
 - The Snappy compressor is **BSD-3-Clause**.
 - Other ported / clean-room files retain upstream **MIT** attribution.
+
+DXV is encoded and read by **DXVKit**, a clean-room DXV codec (MIT); HAP sources
+are decoded and previews played by **GlanceCore / GlancePlayback** (MIT). Nothing
+in GlEnc is LGPL or GPL.
 
 Full upstream attribution is in
 [`THIRD-PARTY-NOTICES.md`](./THIRD-PARTY-NOTICES.md); license texts are in

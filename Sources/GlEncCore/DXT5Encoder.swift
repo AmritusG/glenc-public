@@ -1,48 +1,27 @@
 // SPDX-License-Identifier: MIT
 /*
- * DXT5 (DXV3 Normal-quality + alpha) frame encoder.
+ * BC3 block encoder for one frame (the DXT5 texture): 4×4 RGBA tiles →
+ * 16-byte BC3 blocks (8-byte BC4 alpha + 8-byte BC1 colour) via
+ * BC3BlockEncoder, over the coded (aligned, zero-padded) size. Used by
+ * the HAP encoders (Hap5, and HapFrameEncoder's hap5 arm) with 4-pixel
+ * alignment.
  *
- * Top-level FrameEncoder for the DXT5 path. Composes:
- *   - BC3BlockEncoder: 4×4 RGBA tile → 16-byte BC3 block
- *     (8-byte BC4 alpha + 8-byte BC1 color).
- *   - DXVLZWriter.compressDXT5: BC3 block stream → LZ-compressed payload.
+ * v1.4.0: DXV3 DXT5 packets are written by DXVKit (DXVKitFrameEncoder);
+ * the DXV packet path that lived here (LZ pass via the LGPL DXVLZWriter +
+ * 12-byte DXV3 header) is gone.
  *
- * Per Pass A + Pass B, the per-frame DXV3 packet is:
+ * Source-alpha normalization (DECISIONS-2026-05-10-PassB.md, shared
+ * AlphaNormalization): BC1 stores STRAIGHT RGB, BC4 STRAIGHT alpha —
+ * premultiplied sources are un-premultiplied, straight ones pass, sources
+ * without alpha get α = 255; alphaOnly fails.
  *
- *     [tag 4 LE = 35 54 58 44]   // "DXT5" little-endian
- *     [version_major+1 = 0x04]
- *     [version_minor   = 0x00]
- *     [raw_flag        = 0x00]   // always compressed in Phase 3A
- *     [unknown         = 0x00]
- *     [size 4 LE       = LZ payload byte count]
- *     [LZ payload bytes...]
- *
- * Source-alpha normalization (DECISIONS-2026-05-10-PassB.md). BC1 stores
- * STRAIGHT RGB; BC4 stores STRAIGHT alpha. Source CGImageAlphaInfo is
- * inspected once per frame to decide which transform to apply when
- * copying BGRA → padded RGBA:
- *
- *   .premultipliedFirst / .premultipliedLast
- *       Un-premultiply: R' = round(R * 255 / α) when α > 0; α=0 → RGB=0.
- *       Same for G, B.
- *   .first / .last
- *       Straight RGB and straight alpha as-is.
- *   .noneSkipFirst / .noneSkipLast / .none
- *       α = 255 throughout (overwrite the X channel).
- *   .alphaOnly
- *       Degenerate input — fail with a clear error.
- *
- * 16-pixel alignment (Resolume mandate, same as DXT1): pad coded
- * dimensions up to the next 16-multiple, zero-fill padding.
- *
- * BGRA→RGBA swizzle: PixelFrame carries 32BGRA bytes. BC1 / BC4 read
- * R, G, B, A in that order, so the swizzle happens during the pad/copy.
+ * BGRA→RGBA swizzle happens during the pad/copy.
  */
 
 import Foundation
 import CoreGraphics
 
-public final class DXT5Encoder: FrameEncoder {
+public final class DXT5Encoder {
 
     public enum DXT5Error: Error, CustomStringConvertible {
         case notPrepared
@@ -77,7 +56,6 @@ public final class DXT5Encoder: FrameEncoder {
     private var rgbaBuffer: [UInt8] = []
     /// BC3 block buffer (16 bytes per 4×4 tile).
     private var bc3Buffer: [UInt8] = []
-    private let lzWriter = DXVLZWriter()
 
     public init() {}
 
@@ -85,16 +63,8 @@ public final class DXT5Encoder: FrameEncoder {
     internal var debugBC3Buffer: [UInt8] { bc3Buffer }
     internal var debugCodedDimensions: (Int, Int) { (codedWidth, codedHeight) }
 
-    /// FrameEncoder protocol conformance — DXV3 path. Defaults to
-    /// 16-pixel coded alignment (Resolume DXV3 mandate). DXV3 byte-
-    /// identity must hold; do not change this default.
-    public func prepare(width: Int, height: Int, fps: Double, hasAlpha: Bool) throws {
-        try prepare(width: width, height: height, fps: fps,
-                    hasAlpha: hasAlpha, codedAlignment: 16)
-    }
 
-    /// v0.9.2 Phase C.5 — parameterized prepare. DXV3 callers use the
-    /// protocol overload (codedAlignment=16, sacred for byte-identity).
+    /// v0.9.2 Phase C.5 — parameterized prepare (the only one since v1.4.0).
     /// HAP callers (Hap5Encoder, HapFrameEncoder.prepare for .hap5)
     /// pass `codedAlignment: 4` — the HAP-native 4-pixel block-boundary
     /// alignment. `codedAlignment` must be a power of two ≥ 4
@@ -115,43 +85,14 @@ public final class DXT5Encoder: FrameEncoder {
         prepared = true
     }
 
-    public func encode(frame: PixelFrame) throws -> Data {
-        // Steps 1-2 produce the BC3 block stream into `bc3Buffer`.
-        try encodeBlocks(frame: frame)
 
-        // Step 3: LZ-compress the BC3 block stream.
-        let payload: Data = bc3Buffer.withUnsafeBufferPointer { buf in
-            return lzWriter.compressDXT5(tex: buf.baseAddress!, count: buf.count)
-        }
-
-        // Step 4: prepend the 12-byte DXV3 frame header.
-        var packet = Data(capacity: 12 + payload.count)
-        packet.append(contentsOf: DXVFormat.dxt5.frameTagBytes!)  // 4 bytes (DXV3 variant)
-        packet.append(0x04)                                      // version_major + 1
-        packet.append(0x00)                                      // version_minor
-        packet.append(0x00)                                      // raw_flag (compressed)
-        packet.append(0x00)                                      // unknown
-        let size = UInt32(payload.count)
-        packet.append(UInt8( size        & 0xFF))
-        packet.append(UInt8((size >>  8) & 0xFF))
-        packet.append(UInt8((size >> 16) & 0xFF))
-        packet.append(UInt8((size >> 24) & 0xFF))
-        packet.append(payload)
-        return packet
-    }
-
-    /// v0.9.1 Phase E — encode `frame` to raw BC3 (DXT5) block bytes
-    /// (no LZ pass, no DXV3 framing). Hap5 uses this entry point; the
-    /// BC3 stream is the post-padding raster of 16-byte blocks at
-    /// `codedWidth × codedHeight` (presentation dims rounded up to a
-    /// 16-multiple). The DXV3 `encode(frame:)` path now calls this
-    /// for steps 1-2 and then applies the LZ pass + 12-byte DXV3
-    /// header for steps 3-4.
+    /// v0.9.1 Phase E — encode `frame` to raw BC3 (DXT5) block bytes.
+    /// The HAP encoders use this; the BC3 stream is the post-padding
+    /// raster of 16-byte blocks at `codedWidth × codedHeight`
+    /// (presentation dims rounded up to the prepared alignment).
     ///
-    /// Mirrors `DXT1Encoder.encodeBlocks` (Phase D). Returns a `Data`
-    /// view backed by the internal `bc3Buffer`; the caller must copy
-    /// if they need ownership beyond the next call to
-    /// `encode(frame:)` or `encodeBlocks(frame:)` on this encoder.
+    /// Mirrors `DXT1Encoder.encodeBlocks`. Returns a copy of the
+    /// internal `bc3Buffer` (reused per frame).
     @discardableResult
     public func encodeBlocks(frame: PixelFrame) throws -> Data {
         guard prepared else { throw DXT5Error.notPrepared }
@@ -173,9 +114,6 @@ public final class DXT5Encoder: FrameEncoder {
         return Data(bc3Buffer)
     }
 
-    public func finish() throws {
-        // Nothing to flush — every frame is self-contained.
-    }
 
     // MARK: - Helpers
 

@@ -6,10 +6,14 @@
 // parser follows FFmpeg's libavcodec/dxv.c; the file as published is
 // BSD-2-Clause.) See THIRD-PARTY-NOTICES.md and LICENSES/BSD-2-Clause.txt.
 //
-// vendored from AmritusG/glance @ e134a3a (v0.7.0), GlEnc's validated pin
 //
 //  DXV1PacketDecoder.swift
 //  GlanceCore
+//
+//  Since the DXVKit wave (v0.16.0) Glance decodes legacy DXV with DXVKit
+//  (DXVFrameDecoder / DXVPlayer / DXVThumbnail). This BSD-2-Clause decoder
+//  stays as public API for callers that decode legacy payloads themselves
+//  (Crate's thumbnail and measurement code).
 //
 //  Read support for the legacy DXV1 / DXV2 packet format (codec FourCC
 //  "DXDI"), as a sibling to the DXV3-only path in DXVPacketDecoder.swift.

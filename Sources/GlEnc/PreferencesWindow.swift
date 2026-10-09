@@ -189,7 +189,8 @@ struct PreferencesWindow: View {
 
     /// v0.9.2 Phase G.1 — Advanced encoder tuning, relocated from
     /// the queue column's bottom DisclosureGroup. Session-only flags
-    /// that flip GlEncCore's BC1/BC4 endpoint-search algorithms.
+    /// that flip GlEncCore's BC1/BC4 endpoint-search algorithms. Since
+    /// v1.4.0 they reach the HAP encoders only: DXV is DXVKit's encode.
     /// Useful for A/B testing or VJs who don't mind a 3-12× encode
     /// slowdown for sub-perceptual quality improvement on saturated
     /// content. Defaults (per v0.5.0 / Phase 5C.5) are FALSE — the
@@ -203,7 +204,7 @@ struct PreferencesWindow: View {
                 .onChange(of: clusterFitEnabled) { _, newValue in
                     BC1Config.useClusterFit = newValue
                 }
-            Text("Sub-perceptual quality change with significant encode slowdown (4–12× on the BC1 path).")
+            Text("HAP only (Hap1, Hap5, HapY, HapM). DXV is encoded by DXVKit at its best setting. Significant encode slowdown (4–12×).")
                 .font(.caption)
                 .foregroundColor(.secondary)
             Toggle("Experimental: Refined BC4 endpoint search",
@@ -212,7 +213,7 @@ struct PreferencesWindow: View {
                     BC4Config.useRefinement = newValue
                 }
                 .padding(.top, 4)
-            Text("Sub-perceptual quality change with significant encode slowdown (3× on HQ variants).")
+            Text("HAP only (Hap5, HapY, HapA, HapM). DXV is encoded by DXVKit at its best setting. Encode slowdown (about 3×).")
                 .font(.caption)
                 .foregroundColor(.secondary)
             Text("Session-only — these toggles reset to their defaults when GlEnc relaunches.")

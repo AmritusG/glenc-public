@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT
-// vendored from AmritusG/glance @ e134a3a (v0.7.0), GlEnc's validated pin
 import Foundation
-import Snappy
 
 /// Decode a HAP frame packet into raw DXT bytes ready for
 /// `CPURender.cgImageFromDXT`. Reads the 4-byte (or 8-byte
@@ -176,7 +174,7 @@ public enum HAPPacketDecoder {
 
     private static func snappyDecompress(_ payload: Data) throws -> Data {
         do {
-            return try payload.uncompressedUsingSnappy()
+            return try SnappyDecode.uncompress(payload)
         } catch {
             throw DecodeError.snappyDecompressFailed(underlying: error)
         }

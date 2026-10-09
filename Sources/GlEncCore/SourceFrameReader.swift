@@ -5,6 +5,7 @@ import CoreVideo
 import CoreMedia
 import CoreGraphics
 import GlanceCore
+import DXVKit
 
 /// Per-frame source decoder abstraction for `EncodePipeline`. The
 /// pipeline used to be tightly coupled to `AVAssetReader`, which works
@@ -36,9 +37,10 @@ public enum SourceReaderError: Error, CustomStringConvertible {
     case avAssetReaderStartFailed(Error?)
     case avAssetReaderFailed(Error?)
     case pixelBufferCreateFailed(CVReturn)
-    case dxvFrameReadShort(idx: Int, expected: Int, actual: Int)
+    /// The DXV file could not be demuxed (malformed or unsupported: DXVKit /
+    /// GlanceCore's demuxer refused it). v1.4.0.
+    case dxvDemuxFailed(underlying: Error)
     case dxvDecodeFailed(idx: Int, underlying: Error)
-    case dxvUnsupportedVariant(String)
     // Hardening Fix-Brief 1 — source-input validation at the reader trust
     // boundary. These fire in the reader inits (below) the moment a
     // demuxer-/AVAsset-derived geometry or scalar is known, BEFORE it can
@@ -49,11 +51,6 @@ public enum SourceReaderError: Error, CustomStringConvertible {
     case sourceFrameTooLarge(width: Int, height: Int)
     case sourceFrameRateInvalid(Double)
     case sourceDurationInvalid(Double)
-    /// Fix-Brief 1-narrow — a DXV3 DXT1/DXT5 source frame whose height is
-    /// below one 4×4 block row (h < 4) decodes to zero DXT blocks, which
-    /// would hand GlanceCore an empty buffer and crash on a force-unwrap.
-    /// Caught at the block-count site in `DxvSourceReader.decodeFrameRGBA`.
-    case dxvZeroBlockGeometry(width: Int, height: Int)
 
     public var description: String {
         switch self {
@@ -61,9 +58,8 @@ public enum SourceReaderError: Error, CustomStringConvertible {
         case .avAssetReaderStartFailed(let e): return "AVAssetReader.startReading failed: \(String(describing: e))"
         case .avAssetReaderFailed(let e): return "AVAssetReader failed mid-stream: \(String(describing: e))"
         case .pixelBufferCreateFailed(let r): return "CVPixelBufferCreate failed (\(r))"
-        case .dxvFrameReadShort(let i, let e, let a): return "DXV frame \(i): short read (expected \(e), got \(a))"
+        case .dxvDemuxFailed(let u): return "DXV file could not be read: \(u)"
         case .dxvDecodeFailed(let i, let u): return "DXV frame \(i) decode failed: \(u)"
-        case .dxvUnsupportedVariant(let v): return "DXV unsupported variant for this path: \(v)"
         case .sourceDimensionsInvalid(let w, let h):
             return "source reports unusable dimensions \(w)×\(h) — width and height must each be positive"
         case .sourceDimensionsTooLarge(let w, let h):
@@ -74,8 +70,6 @@ public enum SourceReaderError: Error, CustomStringConvertible {
             return "source reports an invalid frame rate (\(fps) fps)"
         case .sourceDurationInvalid(let dur):
             return "source reports an invalid duration (\(dur) seconds)"
-        case .dxvZeroBlockGeometry(let w, let h):
-            return "DXV DXT source frame \(w)×\(h) decodes to zero blocks (DXT requires height ≥ 4); cannot decode"
         }
     }
 }
@@ -89,17 +83,10 @@ public enum SourceReaderError: Error, CustomStringConvertible {
 ///     EVERY build config. A source dimension above this literally cannot
 ///     be written to a DXV/HAP MOV.
 ///   - `minDimension` (1): reject only truly-degenerate, non-positive
-///     dimensions at the reader boundary. The sub-4-height DXT-decode
-///     crash (height < 4 → zero DXT block rows → empty decode buffer →
-///     force-unwrap in GlanceCore `CPURender.cgImageFromDXT`) is NOT
-///     guarded by a blanket floor here — a "min 4" would re-impose the
-///     constraint the project deliberately removed for output/crop dims
-///     (6eb6430 / 351f1ca, validated in Resolume). That crash is caught
-///     at its ACTUAL site instead (the `DxvSourceReader` DXV3 DXT
-///     block-count, `decodeFrameRGBA` below: `guard blocks > 0`), so
-///     legitimate sub-4 / non-4-aligned sources on every other path
-///     (AVAsset, HAP, DXV1/DXDI which pads both axes to 16) pass
-///     untouched.
+///     dimensions at the reader boundary. No "min 4": sub-4 and
+///     non-4-aligned sources are legitimate on every path (DXVKit decodes
+///     any DXV size ≥ 1 since v1.4.0; the old sub-4 DXT crash site in
+///     GlanceCore v0.7.0's CPURender is gone).
 ///   - `maxFramePixels` (16384²): a sane RGBA-buffer ceiling (~1 GiB at
 ///     4 bpp) — generous against the largest 4096×2160 resize preset and
 ///     plausible LED-wall canvases, but rejects pathological dimensions
@@ -270,247 +257,70 @@ public final class AVAssetReaderSourceReader: SourceFrameReader {
     }
 }
 
-// MARK: - GlanceCore-backed DXV3 reader
+// MARK: - DXVKit-backed DXV reader
 
-/// GlanceCore-backed DXV3 source reader. Demuxes the source `.mov` via
-/// `DXVDemuxer`, then per-frame: reads the packet, runs the variant-
-/// appropriate GlanceCore decoder + `CPURender`, and packages the result
-/// as a BGRA `CVPixelBuffer` ready for the encoder.
+/// DXV source reader (DXV3 and legacy DXV1 / DXV2), decoded by DXVKit
+/// (AmritusG/dxvkit, pinned exact 1.0.0): `DXVMovie` demuxes, a reused
+/// `DXVFrame` decodes each packet to its block streams, and
+/// `DXVFrame.rgba` converts them to RGBA at the display size — DXVKit owns
+/// the 16 x 16 padding, odd sizes and both generations. YCG6 / YG10 come
+/// out in Resolume Arena's colour convention (DXVKit's), not the older
+/// GlanceCore v0.7.0 conversion.
 ///
-/// Phase 5C corpus generation (`CorpusGenerationTests`) already used
-/// this exact decode path to produce reference PNGs, so this is a
-/// re-use of a proven path — just wrapped behind the `SourceFrameReader`
-/// protocol and feeding into the encoder instead of writing PNG.
-///
-/// Alpha semantics: GlanceCore's `CPURender` outputs straight-alpha RGBA
-/// for all four DXV3 variants (the alpha byte holds the decoded alpha
-/// value, not a premultiplied product). The resulting `PixelFrame` is
-/// tagged `.last`, which matches the AVAssetReader path's default and
-/// is what the DXT5 / YG10 encoders expect.
+/// Alpha semantics: DXVKit returns the decoded alpha as stored (no
+/// premultiply), DXT1 / YCG6 with α = 255. The `PixelFrame` is tagged
+/// `.last` (straight), as before.
 public final class DxvSourceReader: SourceFrameReader {
     public let sourceWidth: Int
     public let sourceHeight: Int
     public let sourceFPS: Double
     public let totalFrameCount: Int
 
-    private let variant: DXVVariant
-    /// DXV generation from the demuxed index. DXV3 sources (DXD3 trak
-    /// FourCC) take the existing DXVPacketDecoder path; DXV1/DXV2
-    /// legacy sources (DXDI trak FourCC) route through DXV1PacketDecoder
-    /// — mirroring v0.7.0's DXVThumbnail/DXVPlayer generation dispatch.
-    private let generation: DXVGeneration
-    private let codedWidth: Int
-    private let codedHeight: Int
-    private let chromaWidth: Int
-    private let chromaHeight: Int
-    private let frames: [DXVFrameEntry]
-    private let handle: FileHandle
+    private let movie: DXVMovie
+    private let frame = DXVFrame()
+    /// Presentation times from GlanceCore's demuxer (seconds, per sample).
+    private let presentationTimes: [Double]
     private var frameIdx: Int = 0
-    /// One-shot guard so the .dxv1 arm logs its resolved values exactly
-    /// once (first decoded DXDI frame) instead of per-frame.
-    private var loggedDXV1Diag = false
 
     public init(url: URL) throws {
-        let index = try DXVDemuxer.demux(url: url)
-        // Hardening Fix-Brief 1 — validate the demuxed geometry before the
-        // coded-dimension cascade below (zero/odd/oversized dims would
-        // otherwise produce a zero-block decode buffer that force-unwraps
-        // to a crash in CPURender, or an OOM allocation in the encoder).
+        let index: DXVMovieIndex
+        do { index = try DXVDemuxer.demux(url: url) } catch {
+            throw SourceReaderError.dxvDemuxFailed(underlying: error)
+        }
+        // Hardening Fix-Brief 1 — validate the demuxed geometry before any
+        // allocation (zero / oversized dims are rejected cleanly).
         let durationSec = index.frameRate > 0
             ? Double(index.frames.count) / index.frameRate : 0
         try validateSourceGeometry(
             width: index.width, height: index.height,
             fps: index.frameRate, duration: durationSec)
+        do { self.movie = try DXVMovie(url: url) } catch {
+            throw SourceReaderError.dxvDemuxFailed(underlying: error)
+        }
         self.sourceWidth = index.width
         self.sourceHeight = index.height
         self.sourceFPS = index.frameRate
         self.totalFrameCount = index.frames.count
-        self.variant = index.variant
-        self.generation = index.generation
-        let cW = (index.width + 15) / 16 * 16
-        let cH = (index.height + 15) / 16 * 16
-        self.codedWidth = cW
-        self.codedHeight = cH
-        self.chromaWidth = cW / 2
-        self.chromaHeight = cH / 2
-        self.frames = index.frames
-        self.handle = try FileHandle(forReadingFrom: url)
+        self.presentationTimes = index.frames.map(\.presentationTime)
     }
 
-    deinit { try? handle.close() }
-
     public func readNextFrame() throws -> PixelFrame? {
-        guard frameIdx < frames.count else { return nil }
+        guard frameIdx < totalFrameCount else { return nil }
         let myIdx = frameIdx
-        let entry = frames[myIdx]
         frameIdx += 1
-
-        try handle.seek(toOffset: entry.fileOffset)
-        let pktBytes = try handle.read(upToCount: Int(entry.size)) ?? Data()
-        guard pktBytes.count == Int(entry.size) else {
-            throw SourceReaderError.dxvFrameReadShort(
-                idx: myIdx, expected: Int(entry.size), actual: pktBytes.count)
-        }
-
         let rgba: Data
         do {
-            rgba = try decodeFrameRGBA(packet: pktBytes)
+            try movie.decodeBlocks(at: myIdx, into: frame)
+            rgba = try frame.rgba()
         } catch {
             throw SourceReaderError.dxvDecodeFailed(idx: myIdx, underlying: error)
         }
-
         guard let pb = try Self.makeBGRAPixelBuffer(
                 rgba: rgba, width: sourceWidth, height: sourceHeight) else {
             throw SourceReaderError.pixelBufferCreateFailed(kCVReturnAllocationFailed)
         }
-        let pts = CMTime(seconds: entry.presentationTime, preferredTimescale: 600)
+        let pts = CMTime(seconds: presentationTimes[myIdx], preferredTimescale: 600)
         return PixelFrame(pixelBuffer: pb, presentationTime: pts, alphaInfo: .last)
-    }
-
-    /// Decode one DXV packet to straight-alpha RGBA bytes
-    /// (sourceWidth × sourceHeight × 4). Variant-routed through the
-    /// matching GlanceCore decoder + CPURender. Alpha is straight
-    /// (DXT1/YCG6 → 255 throughout; DXT5/YG10 → the source's decoded
-    /// alpha plane).
-    private func decodeFrameRGBA(packet: Data) throws -> Data {
-        let w = sourceWidth, h = sourceHeight
-
-        let cgImage: CGImage
-        switch generation {
-        case .dxv1:
-            // Legacy DXV1/DXV2 ("DXDI") source. Mirrors v0.7.0's
-            // DXVThumbnail.decodeDXTPacket: the DXV1 encoder pads BOTH
-            // width and height to 16-pixel block alignment (DXV3 pads
-            // width only), so the LZF-decompressed buffer is sized to
-            // the both-axes-padded grid. CPURender.cgImageFromDXT is
-            // then handed the DISPLAY dims — it reads height/4 block
-            // rows and discards the trailing padding rows. DXDI carries
-            // only the DXT variants (dxt1/dxt5); HQ never occurs here.
-            let paddedWidth = (w + 15) / 16 * 16
-            let textureHeight = (h + 15) / 16 * 16
-            let dxtSize: Int
-            switch variant {
-            case .dxt1: dxtSize = paddedWidth * textureHeight / 2
-            case .dxt5: dxtSize = paddedWidth * textureHeight
-            default:
-                throw SourceReaderError.dxvUnsupportedVariant(
-                    "DXV1/DXDI source with non-DXT variant \(variant)")
-            }
-            if !loggedDXV1Diag {
-                loggedDXV1Diag = true
-                FileHandle.standardError.write(Data(
-                    ("[GlEnc/dxdi] dxv1 decode arm: generation=\(generation) " +
-                     "variant=\(variant) display=\(w)x\(h) " +
-                     "paddedWidth=\(paddedWidth) textureHeight=\(textureHeight) " +
-                     "dxtSize=\(dxtSize)\n").utf8))
-            }
-            let (header, payload) = try DXV1PacketDecoder.parseHeader(packet)
-            let dxtBytes = try DXV1PacketDecoder.decodePayload(
-                payload, header: header, expectedSize: dxtSize)
-            cgImage = try CPURender.cgImageFromDXT(
-                dxtBytes: dxtBytes, variant: variant, width: w, height: h)
-
-        case .dxv3:
-            let (_, payload) = try DXVPacketDecoder.parseHeader(packet)
-            switch variant {
-            case .dxt1:
-                let paddedW = (w + 15) / 16 * 16
-                let blocks = (paddedW / 4) * (h / 4)
-                // Fix-Brief 1-narrow — a height < 4 (h/4 == 0) yields zero
-                // DXT blocks; decompressDXT1 would then return an empty
-                // Data that CPURender.cgImageFromDXT force-unwraps. Reject
-                // cleanly here instead of handing GlanceCore the empty
-                // buffer. (w ≥ 1 from the init guard → paddedW/4 ≥ 4, so
-                // blocks == 0 ⟺ h < 4.)
-                guard blocks > 0 else {
-                    throw SourceReaderError.dxvZeroBlockGeometry(width: w, height: h)
-                }
-                let bc1 = try DXVPacketDecoder.decompressDXT1(
-                    payload, expectedSize: blocks * 8)
-                cgImage = try CPURender.cgImageFromDXT(
-                    dxtBytes: bc1, variant: .dxt1, width: w, height: h)
-            case .dxt5:
-                let paddedW = (w + 15) / 16 * 16
-                let blocks = (paddedW / 4) * (h / 4)
-                guard blocks > 0 else {
-                    throw SourceReaderError.dxvZeroBlockGeometry(width: w, height: h)
-                }
-                let bc3 = try DXVPacketDecoder.decompressDXT5(
-                    payload, expectedSize: blocks * 16)
-                cgImage = try CPURender.cgImageFromDXT(
-                    dxtBytes: bc3, variant: .dxt5, width: w, height: h)
-            case .ycg6:
-                let luma = try DXVHQDecoder.decompressYCG6LumaPlane(
-                    payload: payload,
-                    codedWidth: codedWidth, codedHeight: codedHeight)
-                let chroma = try DXVHQDecoder.decompressYCG6ChromaPlane(
-                    payload: payload, startCursor: luma.postCursor,
-                    codedWidth: codedWidth, codedHeight: codedHeight)
-                cgImage = try CPURender.cgImageFromHQ(
-                    y: luma.luma, co: chroma.co, cg: chroma.cg, a: nil,
-                    width: codedWidth, height: codedHeight,
-                    chromaWidth: chromaWidth, chromaHeight: chromaHeight)
-            case .yg10:
-                let r = try DXVHQDecoder.decompressYG10(
-                    payload: payload,
-                    codedWidth: codedWidth, codedHeight: codedHeight)
-                cgImage = try CPURender.cgImageFromHQ(
-                    y: r.y, co: r.co, cg: r.cg, a: r.a,
-                    width: codedWidth, height: codedHeight,
-                    chromaWidth: chromaWidth, chromaHeight: chromaHeight)
-            }
-        }
-
-        // CPURender constructs the CGImage from a `CGDataProvider(data:
-        // Data(rgba) as CFData)`. Asking the provider for its data
-        // returns exactly the original straight-alpha RGBA bytes — no
-        // colorspace conversion, no premultiplication. If for any
-        // reason the provider can't return its data, fall back to
-        // CGContext-rendering into a fresh RGBA buffer.
-        if let cf = cgImage.dataProvider?.data {
-            let data = cf as Data
-            // HQ path: cgImage dims are coded, but we want presentation.
-            // For HQ on a 16-aligned source the two are equal; if a
-            // future source has non-16-aligned dims we'd need to crop
-            // here. Phase 5C's measurement corpus is all 16-aligned;
-            // explicit guard so non-aligned sources surface a clear
-            // error rather than silently mis-sizing the encoder feed.
-            let expectedRGBA = cgImage.width * cgImage.height * 4
-            guard data.count == expectedRGBA else {
-                return try renderRGBA(from: cgImage, width: w, height: h)
-            }
-            // For DXT* the dataProvider already matches presentation
-            // dims. For HQ where coded == presentation (16-aligned)
-            // it also matches. Anything else hits the renderRGBA path.
-            if cgImage.width == w && cgImage.height == h {
-                return data
-            }
-        }
-        return try renderRGBA(from: cgImage, width: w, height: h)
-    }
-
-    /// Fallback path: render the decoded CGImage into a fresh RGBA
-    /// byte buffer at presentation dimensions. Used only when the
-    /// straight-bytes extraction above declines (size mismatch, or a
-    /// future HQ source with non-16-aligned dims).
-    private func renderRGBA(from image: CGImage, width: Int, height: Int) throws -> Data {
-        var bytes = Data(count: width * height * 4)
-        let bmpInfo: UInt32 = CGImageAlphaInfo.premultipliedLast.rawValue
-                            | CGBitmapInfo.byteOrder32Big.rawValue
-        try bytes.withUnsafeMutableBytes { ptr in
-            guard let base = ptr.baseAddress,
-                  let ctx = CGContext(
-                    data: base, width: width, height: height,
-                    bitsPerComponent: 8, bytesPerRow: width * 4,
-                    space: CGColorSpaceCreateDeviceRGB(),
-                    bitmapInfo: bmpInfo)
-            else {
-                throw SourceReaderError.pixelBufferCreateFailed(kCVReturnAllocationFailed)
-            }
-            ctx.interpolationQuality = .none
-            ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        }
-        return bytes
     }
 
     /// Create a kCVPixelFormatType_32BGRA pixel buffer and fill it from

@@ -1,0 +1,6 @@
+// DXVKit Clang module (SwiftPM): exposes the C header only.
+// MIT License. Copyright (c) 2026 Amrit Rosell. See LICENSE.
+module CDXVKit {
+    header "dxvkit.h"
+    export *
+}

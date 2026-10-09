@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-// vendored from AmritusG/glance @ e134a3a (v0.7.0), GlEnc's validated pin
 import Foundation
 
 /// Reads the FourCC compressor code from the first video track of a MOV/MP4
@@ -28,11 +27,20 @@ public enum DXVDetector {
     /// to showing the raw FourCC.
     public static func displayName(for fourCC: String) -> String? {
         switch fourCC {
-        case "DXV3", "DXVA", "DXV1": return fourCC
+        // Real Resolume DXV container FourCCs (the trak stsd compressor code):
+        // DXD3 = the DXV3 family, DXDI = legacy DXV1/DXV2. The bare
+        // "DXV3"/"DXV1" names are NOT real stsd codes, so the old cases never
+        // matched and DXV fell through to showing the raw FourCC.
+        // DXD4: a DXV3 sample-entry FourCC Resolume Arena 7.28 also accepts.
+        case "DXD3", "DXD4": return "DXV3"
+        case "DXDI": return "DXV1"
+        case "rle ": return "QuickTime Animation"
         case "Hap1": return "HAP"
-        case "HapA": return "HAP Alpha"
+        case "Hap5": return "HAP Alpha"
         case "HapY": return "HAP Q"
         case "HapM": return "HAP Q Alpha"
+        case "HapA": return "HAP Alpha-only"
+        case "jpeg", "mjpa", "mjpb", "mjpg": return "Motion JPEG"
         case "apch": return "ProRes 422 HQ"
         case "apcn": return "ProRes 422"
         case "apcs": return "ProRes 422 LT"
