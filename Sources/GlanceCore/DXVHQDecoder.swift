@@ -10,9 +10,12 @@ import Foundation
 /// Same contract as before: `payload` is the bytes after the 12-byte header
 /// (`DXVPacketDecoder.parseHeader`), `codedWidth` the width padded to 16,
 /// `codedHeight` the display height. Planes are `codedWidth x codedHeight`
-/// (Y, A) and `codedWidth/2 x codedHeight/2` (Co, Cg). One difference: the
-/// last rows of a plane whose height is not a multiple of 4, which the old
-/// decoder left at 0, now hold the decoded picture.
+/// (Y, A) and `ceil(codedWidth/2) x ceil(codedHeight/2)` (Co, Cg): every
+/// row and column, including the last one of an odd size, has its own
+/// chroma sample (v0.17.2; before, a 1-row clip got a 0-row chroma plane).
+/// One difference from the pre-DXVKit decoder: the last rows of a plane
+/// whose height is not a multiple of 4, which it left at 0, now hold the
+/// decoded picture.
 ///
 /// For display, prefer `DXVPlayer` (GPU block streams) or `DXVThumbnail`
 /// (DXVKit RGBA, Resolume Arena's colour convention).
@@ -82,7 +85,7 @@ public enum DXVHQDecoder {
         }
     }
 
-    /// YCG6 chroma: the Co + Cg planes (width/2 x height/2 each).
+    /// YCG6 chroma: the Co + Cg planes (ceil(width/2) x ceil(height/2) each).
     public struct ChromaResult {
         public let co: [UInt8]
         public let cg: [UInt8]
@@ -124,7 +127,7 @@ public enum DXVHQDecoder {
         let t0 = Date()
         let frame = try decode(payload, tag: "YCG6", codedWidth: codedWidth, codedHeight: codedHeight)
         let t1 = Date()
-        let cw = codedWidth / 2, ch = codedHeight / 2
+        let cw = (codedWidth + 1) / 2, ch = (codedHeight + 1) / 2
         let c = DXVKitBridge.unpack(frame, plane: 1, width: cw, height: ch)
         return ChromaResult(co: c.ch0, cg: c.ch1!, chromaWidth: cw, chromaHeight: ch,
                             cocgMs: t1.timeIntervalSince(t0) * 1000, bc5Ms: Date().timeIntervalSince(t1) * 1000,
@@ -140,7 +143,7 @@ public enum DXVHQDecoder {
         let t1 = Date()
         let ya = DXVKitBridge.unpack(frame, plane: 0, width: codedWidth, height: codedHeight)
         let t2 = Date()
-        let cw = codedWidth / 2, ch = codedHeight / 2
+        let cw = (codedWidth + 1) / 2, ch = (codedHeight + 1) / 2
         let c = DXVKitBridge.unpack(frame, plane: 1, width: cw, height: ch)
         return YG10Result(y: ya.ch0, a: ya.ch1!, co: c.ch0, cg: c.ch1!,
                           width: codedWidth, height: codedHeight, chromaWidth: cw, chromaHeight: ch,

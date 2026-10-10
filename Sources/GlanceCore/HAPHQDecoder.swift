@@ -273,23 +273,11 @@ public enum HAPHQDecoder {
                 let dst = outBuf.baseAddress!
                 for i in 0..<pixelCount {
                     let off = i * 4
-                    let r_in = Double(src[off    ]) / 255.0
-                    let g_in = Double(src[off + 1]) / 255.0
-                    let b_in = Double(src[off + 2]) / 255.0
-                    let y    = Double(src[off + 3]) / 255.0
-
-                    let s  = 1.0 / ((255.0 / 8.0) * b_in + 1.0)
-                    let co = (r_in - 0.5) * s
-                    let cg = (g_in - 0.5) * s
-
-                    let r = y + co - cg
-                    let g = y + cg
-                    let b = y - co - cg
-
+                    let (r, g, b) = hapYCoCgToRGB(r: src[off], g: src[off + 1], b: src[off + 2], y: src[off + 3])
                     let dstOff = i * 3
-                    dst[dstOff    ] = byte(r)
-                    dst[dstOff + 1] = byte(g)
-                    dst[dstOff + 2] = byte(b)
+                    dst[dstOff    ] = r
+                    dst[dstOff + 1] = g
+                    dst[dstOff + 2] = b
                 }
             }
         }
@@ -304,46 +292,54 @@ public enum HAPHQDecoder {
         width: Int,
         height: Int
     ) throws -> [UInt8] {
-        // RGTC1 / BC4: 8 bytes per 4×4 block, single channel.
-        // BC4BC5Unpack.unpackBC4Plane requires width & height
-        // multiples of 4. Real HAP files satisfy this (encoders
-        // pad source dims).
-        guard width % 4 == 0, height % 4 == 0 else {
-            throw HQError.dimensionMismatch(
-                "BC4 requires width/height multiples of 4 (got \(width)x\(height))"
-            )
-        }
-        let blocksPerRow = width / 4
-        let blocksPerCol = height / 4
+        // RGTC1 / BC4: 8 bytes per 4×4 block, single channel. HAP pads
+        // the block grid to whole blocks (ceil(w/4) x ceil(h/4)); unpack
+        // the padded plane, then crop to the display size. (Until v0.17.2
+        // any width or height not a multiple of 4 was refused here.)
+        let blocksPerRow = (width + 3) / 4
+        let blocksPerCol = (height + 3) / 4
         let expected = blocksPerRow * blocksPerCol * 8
-        guard rgtc1Bytes.count >= expected else {
+        guard width > 0, height > 0, rgtc1Bytes.count >= expected else {
             throw HQError.dimensionMismatch(
                 "RGTC1 bytes \(rgtc1Bytes.count) < expected \(expected) for \(width)x\(height)"
             )
         }
-        var plane = [UInt8](repeating: 0, count: width * height)
+        let paddedW = blocksPerRow * 4, paddedH = blocksPerCol * 4
+        var padded = [UInt8](repeating: 0, count: paddedW * paddedH)
         rgtc1Bytes.withUnsafeBytes { rawBuf in
             let blockPtr = rawBuf.bindMemory(to: UInt8.self).baseAddress!
-            plane.withUnsafeMutableBufferPointer { outBuf in
+            padded.withUnsafeMutableBufferPointer { outBuf in
                 BC4BC5Unpack.unpackBC4Plane(
                     blocks: blockPtr,
                     blocksCount: blocksPerRow * blocksPerCol,
                     output: outBuf.baseAddress!,
-                    width: width, height: height
+                    width: paddedW, height: paddedH
                 )
             }
+        }
+        if paddedW == width && paddedH == height { return padded }
+        var plane = [UInt8](repeating: 0, count: width * height)
+        for row in 0..<height {
+            plane[(row * width)..<((row + 1) * width)] = padded[(row * paddedW)..<(row * paddedW + width)]
         }
         return plane
     }
 
     // MARK: - Helpers
 
+    /// The scaled-YCoCg inverse above (`s = 1 / ((255/8) B + 1)`,
+    /// `Co = (R - 0.5) s`, `Cg = (G - 0.5) s`, `R' = Y + Co - Cg`,
+    /// `G' = Y + Cg`, `B' = Y - Co - Cg`, rounded half up and clamped to
+    /// 8 bits) in exact integers. With 8-bit inputs and D = B + 8, in units
+    /// of 1/255: R' = Y + 8 (R - G) / D, G' = Y + 4 (2G - 255) / D,
+    /// B' = Y - 8 (R + G - 255) / D. Until v0.17.2 this was evaluated in
+    /// Double, which could round an exact .5 the wrong way; the GPU shader
+    /// (`DXVRenderer` `hapYCoCgSrc`) uses these same integers.
     @inline(__always)
-    private static func byte(_ v: Double) -> UInt8 {
-        let scaled = v * 255.0
-        if scaled <= 0 { return 0 }
-        if scaled >= 255 { return 255 }
-        return UInt8(scaled.rounded())
+    static func hapYCoCgToRGB(r: UInt8, g: UInt8, b: UInt8, y: UInt8) -> (UInt8, UInt8, UInt8) {
+        let r = Int(r), g = Int(g), d = Int(b) + 8, yd = Int(y) * d
+        @inline(__always) func round(_ v: Int) -> UInt8 { v <= 0 ? 0 : UInt8(min(255, (2 * v + d) / (2 * d))) }
+        return (round(yd + 8 * (r - g)), round(yd + 4 * (2 * g - 255)), round(yd - 8 * (r + g - 255)))
     }
 
     /// CGImage construction from an RGBA byte buffer. Duplicated

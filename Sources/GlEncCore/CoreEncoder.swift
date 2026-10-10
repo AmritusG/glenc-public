@@ -44,6 +44,11 @@ public struct EncodeRequest: Sendable {
     /// honoured for `.dxv(.hap1)` / `.dxv(.hap5)` only — every other
     /// codec ignores it. Additive: existing callers omit it and get 1.
     public var hapChunks: Int
+    /// v1.6.0: what a DXV source's colour is (Arena's "Alpha Type", default
+    /// Premultiplied): `.premultiplied` un-premultiplies on read, before any
+    /// encode; `.straight` passes through. Ignored for every other source
+    /// (HAP / ProRes / HEVC alpha are read as their format states).
+    public var sourceAlphaType: SourceAlphaType
 
     public init(
         sourceURL: URL,
@@ -57,7 +62,8 @@ public struct EncodeRequest: Sendable {
         cropRect: CGRect? = nil,
         frameRange: Range<Int>? = nil,
         writerVersion: String = "GlEnc",
-        hapChunks: Int = 1
+        hapChunks: Int = 1,
+        sourceAlphaType: SourceAlphaType = .default
     ) {
         self.sourceURL = sourceURL
         self.outputURL = outputURL
@@ -71,6 +77,7 @@ public struct EncodeRequest: Sendable {
         self.frameRange = frameRange
         self.writerVersion = writerVersion
         self.hapChunks = hapChunks
+        self.sourceAlphaType = sourceAlphaType
     }
 }
 
@@ -161,6 +168,7 @@ public enum CoreEncoder {
                 },
                 progress: progress,
                 sourceAlphaInfo: sourceAlphaInfo,
+                sourceAlphaType: req.sourceAlphaType,
                 frameRange: req.frameRange,
                 outputSize: req.outputSize,
                 resizeQuality: req.resizeQuality,
@@ -185,6 +193,7 @@ public enum CoreEncoder {
                 },
                 progress: progress,
                 sourceAlphaInfo: srcAlpha,
+                sourceAlphaType: req.sourceAlphaType,
                 frameRange: req.frameRange,
                 outputSize: req.outputSize,
                 resizeQuality: req.resizeQuality,
@@ -218,6 +227,7 @@ public enum CoreEncoder {
                 },
                 progress: progress,
                 sourceAlphaInfo: .noneSkipLast,
+                sourceAlphaType: req.sourceAlphaType,
                 frameRange: req.frameRange,
                 outputSize: req.outputSize,
                 resizeQuality: req.resizeQuality,
@@ -243,6 +253,7 @@ public enum CoreEncoder {
                 },
                 progress: progress,
                 sourceAlphaInfo: .noneSkipLast,
+                sourceAlphaType: req.sourceAlphaType,
                 frameRange: req.frameRange,
                 outputSize: req.outputSize,
                 resizeQuality: req.resizeQuality,

@@ -9,14 +9,12 @@
 // timescale, udta) and its source-alpha normalisation:
 //
 //   DXT1 / YCG6  no alpha: α forced to 255.
-//   DXT5         STRAIGHT colour (DECISIONS-2026-05-10-PassB): a
+//   DXT5, YG10   STRAIGHT colour (DECISIONS-2026-05-10-PassB for DXT5;
+//                DECISIONS-2026-10-10 for YG10, Amrit: "Straight"): a
 //                premultiplied source is un-premultiplied, a straight one
 //                passes (AlphaNormalization, shared with Hap5 / HapA / HapM).
-//   YG10         PREMULTIPLIED colour, straight α plane
-//                (DECISIONS-2026-05-11-PassD, AME's convention): a straight
-//                source is premultiplied, a premultiplied one passes. The
-//                encoder is told (`premultipliedInput`), which DXVKit
-//                records declaratively — the packet bytes do not change.
+//                Up to v1.5.0 YG10 wrote premultiplied colour (PassD, AME's
+//                convention); `premultipliedInput` is never set now.
 //
 // YCG6 / YG10 colour is DXVKit's exact, unrounded YCoCg (chroma midpoint
 // 127.5: the Arena / Alley convention, Amrit: "Keep exact.").
@@ -78,9 +76,7 @@ public final class DXVKitFrameEncoder: FrameEncoder {
         rgba = [UInt8](repeating: 0, count: width * height * 4)
         encoder = try DXVEncoder(
             variant: variant, width: width, height: height,
-            options: DXVEncodeOptions(effort: Self.effort,
-                                      premultipliedInput: format == .yg10,
-                                      parallel: true))
+            options: DXVEncodeOptions(effort: Self.effort, parallel: true))
     }
 
     public func encode(frame: PixelFrame) throws -> Data {
@@ -121,36 +117,13 @@ public final class DXVKitFrameEncoder: FrameEncoder {
                     for i in 0..<n {
                         d[i * 4] = s[i * 4 + 2]; d[i * 4 + 1] = s[i * 4 + 1]; d[i * 4 + 2] = s[i * 4]; d[i * 4 + 3] = 255
                     }
-                case .yg10:
-                    for i in 0..<n {
-                        let (r, g, b, a) = Self.premultipliedYG10(r: s[i * 4 + 2], g: s[i * 4 + 1], b: s[i * 4], a: s[i * 4 + 3], mode: mode)
-                        d[i * 4] = r; d[i * 4 + 1] = g; d[i * 4 + 2] = b; d[i * 4 + 3] = a
-                    }
-                default:   // .dxt5: straight
+                default:   // .dxt5, .yg10: straight
                     for i in 0..<n {
                         let (r, g, b, a) = mode.apply(r: s[i * 4 + 2], g: s[i * 4 + 1], b: s[i * 4], a: s[i * 4 + 3])
                         d[i * 4] = r; d[i * 4 + 1] = g; d[i * 4 + 2] = b; d[i * 4 + 3] = a
                     }
                 }
             }
-        }
-    }
-
-    /// YG10 colour rule (unchanged from GlEnc's YG10 encoder): premultiplied
-    /// RGB, straight α. Straight in → R' = round(R·α/255) (α = 0 → 0);
-    /// premultiplied in → as is; no alpha → α = 255.
-    @inline(__always)
-    static func premultipliedYG10(r: UInt8, g: UInt8, b: UInt8, a: UInt8,
-                                  mode: AlphaNormalization) -> (UInt8, UInt8, UInt8, UInt8) {
-        switch mode {
-        case .forceOpaque: return (r, g, b, 255)
-        case .unpremultiply: return (r, g, b, a)            // source already premultiplied: pass through
-        case .straightThrough:
-            if a == 0 { return (0, 0, 0, 0) }
-            if a == 255 { return (r, g, b, 255) }
-            let ai = Int(a)
-            return (UInt8((Int(r) * ai + 127) / 255), UInt8((Int(g) * ai + 127) / 255),
-                    UInt8((Int(b) * ai + 127) / 255), a)
         }
     }
 }

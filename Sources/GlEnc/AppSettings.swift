@@ -49,6 +49,12 @@ final class AppSettings: ObservableObject {
         didSet { userDefaults.set(defaultHapChunks, forKey: Keys.defaultHapChunks) }
     }
 
+    /// v1.6.0 — "Alpha Type" for new DXV sources with alpha (Arena's name
+    /// and default: Premultiplied). Persisted as its raw value.
+    @Published var defaultSourceAlphaType: SourceAlphaType {
+        didSet { userDefaults.set(defaultSourceAlphaType.rawValue, forKey: Keys.defaultSourceAlphaType) }
+    }
+
     // MARK: - Codec defaults beyond DXV/HAP (batch-edit / defaults parity)
 
     /// Default output codec for new jobs. For the DXV/HAP family the
@@ -285,6 +291,7 @@ final class AppSettings: ObservableObject {
         static let defaultQuality              = "glenc.defaultQuality"
         static let defaultAlpha                = "glenc.defaultAlpha"
         static let defaultHapChunks            = "glenc.defaultHapChunks"
+        static let defaultSourceAlphaType      = "glenc.defaultSourceAlphaType"
         static let defaultResizeQuality        = "glenc.defaultResizeQuality"
         static let defaultOutputSize           = "glenc.defaultOutputSize"
         static let defaultAspectMode           = "glenc.defaultAspectMode"
@@ -320,6 +327,8 @@ final class AppSettings: ObservableObject {
         // to 1...64 defensively against a corrupt/out-of-range stored value.
         self.defaultHapChunks =
             min(64, max(1, (d.object(forKey: Keys.defaultHapChunks) as? Int) ?? 1))
+        self.defaultSourceAlphaType =
+            SourceAlphaType(rawValue: d.string(forKey: Keys.defaultSourceAlphaType) ?? "") ?? .default
         self.defaultOutputCodec = {
             if let data = d.data(forKey: Keys.defaultOutputCodec),
                let decoded = try? JSONDecoder().decode(OutputCodec.self, from: data) {
@@ -392,6 +401,7 @@ final class AppSettings: ObservableObject {
         defaultQuality = .normal
         defaultAlpha = .withoutAlpha
         defaultHapChunks = 1
+        defaultSourceAlphaType = .default
         defaultOutputCodec = .dxv(.dxt1)
         defaultOutputContainer = .mov
         defaultVideoSettings = .default

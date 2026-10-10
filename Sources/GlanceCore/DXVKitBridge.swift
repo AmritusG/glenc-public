@@ -34,6 +34,13 @@ enum DXVKitBridge {
         }
     }
 
+    /// One sample → DXVKit's display-size RGBA (not premultiplied).
+    static func rgba(packet: Data, index: DXVMovieIndex) throws -> [UInt8] {
+        let frame = DXVKit.DXVFrame()
+        try decode(packet: packet, index: index, into: frame)
+        return [UInt8](try frame.rgba())
+    }
+
     /// The BC1 / BC3 bytes `DXVRenderer.uploadFrame` / `MetalDXVRenderer.uploadFrame`
     /// take for a display size: 16-padded block columns (as before) and
     /// exactly ceil(displayHeight / 4) block rows, i.e. the prefix of plane 0.

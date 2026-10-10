@@ -36,7 +36,7 @@ let package = Package(
             dependencies: ["CDXVKit"],
             path: "Sources/DXVKit"
         ),
-        // Glance 0.17.1 — vendored C Snappy (BSD-3), GlanceCore, GlancePlayback. MIT.
+        // Glance 0.17.3 — vendored C Snappy (BSD-3), GlanceCore, GlancePlayback. MIT.
         .target(name: "SnappyC", path: "Sources/SnappyC"),
         .target(
             name: "GlanceCore",

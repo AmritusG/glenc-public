@@ -44,6 +44,13 @@ struct SettingsBarView: View {
         queue.applyFromSettingsBar(e)
     }
 
+    /// v1.6.0 — whose Alpha Type the bar shows: the selected jobs whose
+    /// source is DXV with alpha, or the defaults.
+    private var alphaTypeTargets: [JobSettings] {
+        isBatch ? queue.selectedJobs.filter { $0.sourceAlphaReport?.kind == .choosable }.map(\.settings)
+                : [queue.defaultSettings]
+    }
+
     /// The value shared by every element of `list`, or nil when mixed.
     private func common<T: Equatable>(_ list: [JobSettings], _ f: (JobSettings) -> T) -> T? {
         guard let first = list.first.map(f) else { return nil }
@@ -129,6 +136,17 @@ struct SettingsBarView: View {
                     AlphaMenuItems(apply: apply)
                 }
                 .help("Alpha for the DXV/HAP clips.")
+            }
+
+            // ── Source Alpha Type (v1.6.0): selected DXV alpha sources, or
+            //    the default for new DXV sources ──
+            if !alphaTypeTargets.isEmpty {
+                barMenu("Alpha Type: " + (common(alphaTypeTargets, \.sourceAlphaType)?.label ?? "Mixed")
+                        + partial(alphaTypeTargets.count)) {
+                    SourceAlphaTypeMenuItems(apply: apply)
+                }
+                .help(isBatch ? "What the selected DXV sources' colour is (Resolume Arena's \"Alpha Type\"). Premultiplied is un-premultiplied on read."
+                              : "Alpha Type for newly-dropped DXV sources with alpha (Resolume Arena's default: Premultiplied).")
             }
 
             // ── ProRes variant ──
