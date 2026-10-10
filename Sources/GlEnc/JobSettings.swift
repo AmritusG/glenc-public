@@ -27,6 +27,12 @@ struct JobSettings: Equatable, Codable {
     var outputSize: OutputSize = .original
     var resizeQuality: ResizeQuality = .auto
     var aspectMode: AspectMode = .letterbox
+    /// v1.6.0 — what a DXV source's colour is (Arena's "Alpha Type",
+    /// default Premultiplied). Stored for every job; it only acts on DXV
+    /// sources with alpha (their files do not say) — the reader
+    /// un-premultiplies on read. Other sources are read as their format
+    /// states and show the control disabled.
+    var sourceAlphaType: SourceAlphaType = .default
 
     // MARK: - Applicability predicates (drive both UI gating and no-ops)
 
@@ -157,6 +163,10 @@ struct JobSettings: Equatable, Codable {
         return hz > outputContainer.maxAudioSampleRate
     }
 
+    // MARK: - Source alpha type
+
+    mutating func setSourceAlphaType(_ t: SourceAlphaType) { sourceAlphaType = t }
+
     // MARK: - Resize
 
     mutating func setOutputSize(_ s: OutputSize) { outputSize = s }
@@ -185,7 +195,8 @@ extension EncodeJob {
                         audioRate: audioRate,
                         outputSize: outputSize,
                         resizeQuality: resizeQuality,
-                        aspectMode: aspectMode)
+                        aspectMode: aspectMode,
+                        sourceAlphaType: sourceAlphaType)
         }
         set {
             format = newValue.format
@@ -198,6 +209,7 @@ extension EncodeJob {
             outputSize = newValue.outputSize
             resizeQuality = newValue.resizeQuality
             aspectMode = newValue.aspectMode
+            sourceAlphaType = newValue.sourceAlphaType
         }
     }
 }

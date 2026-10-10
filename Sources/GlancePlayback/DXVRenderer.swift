@@ -24,6 +24,10 @@ import GlanceCore
 /// (chroma midpoint 127.5, nearest chroma, R / B folding); luma and alpha
 /// bilinear when scaled.
 ///
+/// Hap Q / HapM path (v0.17.2): HapY's BC3 scaled-YCoCg blocks (+ HapM's BC4
+/// alpha) decoded in the shader the same way, then `HAPHQDecoder`'s inverse
+/// in exact integers; equal to GlanceCore's CPU HAP decoder at 1:1.
+///
 /// Every program crops its padded texture to the display size by one rule
 /// (`TextureCrop`): exact texel centres at 1:1, no padding when scaled.
 ///
@@ -159,67 +163,34 @@ public final class DXVRenderer {
     /// Set by `uploadRGBAFrame`, cleared by the other uploads.
     private var lastUploadIsRGBA: Bool = false
 
-    // MARK: - GL objects: Hap Q path [Slice 2 — additive]
+    // MARK: - GL objects: Hap Q / HapM path (blocks decoded in the shader)
     //
-    // Hap Q (HapY) is a SINGLE DXT5 texture of *scaled* YCoCg: the
-    // encoder reinterprets the DXT5 channels as R=Co, G=Cg, B=per-block
-    // scale, A=Y, with the scale packed PER-BLOCK in the DXT5 data (it
-    // falls out of the texture sample — it is NOT a global uniform). So
-    // like the DXV3 HQ path, Hap Q stays GPU-native: upload the DXT5 blocks
-    // verbatim as a compressed DXT5 texture (reusing `uploadCompressed`),
-    // then apply scaled-YCoCg → RGB in a NEW fragment shader that samples
-    // that one texture. This is a separate, additive GL program — it does
-    // NOT touch the DXT shader, the DXV3 YCoCg shader, or the Variant
-    // enum. Selection is via `lastUploadIsHapQ`, set by `uploadHapQFrame`.
-    //
-    // The texture uses GL_NEAREST (not GL_LINEAR like the plain DXT
-    // path): the per-block scale channel must NOT be bilinearly
-    // interpolated across block boundaries (that would blend two
-    // different scales → wrong colour), and point sampling is what makes
-    // the GPU output match the CPU reference `HAPHQDecoder.unpackHapYToRGB`
-    // per-fragment. Same precedent as the HQ chroma planes (GL_NEAREST).
-    private var hapQProgram: GLuint = 0
-    private var hapQTexture: GLuint = 0
-    private var hapQULocTexture: GLint = -1
-    private var hapQCropLoc = CropLocations()
+    // Hap Q (HapY) is one DXT5 texture of *scaled* YCoCg (R = Co, G = Cg,
+    // B = per-block scale, A = Y); HapM adds a BC4 alpha plane. Since v0.17.2
+    // both go up as integer block textures, like DXT and HQ, and one program
+    // (`hapYFragmentShaderSrc`) decodes the BC3 colour and BC4 alpha blocks
+    // and applies `HAPHQDecoder`'s scaled-YCoCg inverse in exact integers.
+    // At 1:1 every fragment equals GlanceCore's CPU HAP decoder.
+    private var hapYProgram: GLuint = 0
+    /// BC3 scaled-YCoCg blocks (GL_RGBA32UI) and BC4 alpha blocks (GL_RG32UI).
+    private var hapYColorTexture: GLuint = 0
+    private var hapYAlphaTexture: GLuint = 0
+    private var hapYULocColor: GLint = -1
+    private var hapYULocAlpha: GLint = -1
+    private var hapYULocHasAlpha: GLint = -1
+    private var hapYULocTexSize: GLint = -1
+    private var hapYULocDisplaySize: GLint = -1
+    private var hapYCropLoc = CropLocations()
+    private var hapYCrop = TextureCrop()
+    private var hapYTexSize: (w: Int, h: Int) = (0, 0)
+    private var hapYLastColorBlocks = BlockGrid()
+    private var hapYLastAlphaBlocks = BlockGrid()
 
-    /// Set true by `uploadHapQFrame`, false by `uploadFrame` /
-    /// `uploadHQFrame`. `render()` routes to `renderHapQ()` when true,
-    /// independent of `lastUploadVariant` (which is left at `.dxt5` for
-    /// the Hap Q DXT5 texture so the public dimension API stays valid).
-    private var lastUploadIsHapQ: Bool = false
-
-    private var hapQCrop = TextureCrop()
-    private var hapQLastPaddedWidth: Int = 0
-    private var hapQLastHeight: Int = 0
-    private var hapQHasUpload: Bool = false
-
-    // MARK: - GL objects: HapM path [Slice 3 — additive]
-    //
-    // HapM = HapY scaled-YCoCg DXT5 (color) + HapA BC4/RGTC1 (alpha),
-    // wrapped in a 0x0D outer. This is the renderer's first TWO-texture
-    // composite for a single draw: a NEW program samples the color texture
-    // (scaled-YCoCg → RGB, the EXACT Slice-2 transform) AND a separate BC4
-    // alpha texture (red channel → A), combining them in one fragment.
-    // Output is premultiplied (rgb*a, a) so it composites identically to
-    // DXT5/YG10 under the existing .black (blend off → transparent=black)
-    // and .checkerboard (premultiplied blend) paths — zero blend changes.
-    //
-    // Both textures use GL_NEAREST: the color scale channel must not
-    // interpolate across DXT5 block edges (same as Hap Q), and the BC4
-    // alpha is point-sampled to match the CPU reference. Additive — does
-    // NOT touch the DXT, HQ (DXV3 YCoCg), or Hap Q programs, nor the
-    // Variant enum. Selection is via `lastUploadIsHapM`.
-    private var hapMProgram: GLuint = 0
-    private var hapMColorTexture: GLuint = 0   // DXT5 scaled-YCoCg (S3TC)
-    private var hapMAlphaTexture: GLuint = 0   // BC4 / RGTC1 single-channel red
-    private var hapMULocColor: GLint = -1
-    private var hapMULocAlpha: GLint = -1
-    private var hapMCropLoc = CropLocations()
-
-    /// Set true by `uploadHapMFrame`, false by the other uploads.
-    /// `render()` routes to `renderHapM()` when true.
-    private var lastUploadIsHapM: Bool = false
+    /// Set by `uploadHapQFrame` / `uploadHapMFrame`, cleared by the other
+    /// uploads. `render()` routes to `renderHapY()` when set.
+    private var lastUploadIsHapY: Bool = false
+    /// The last Hap Q / HapM upload carried an alpha plane (HapM).
+    private var hapYHasAlpha: Bool = false
 
     /// Set true when the last DXT upload carried STRAIGHT (non-premultiplied)
     /// alpha — i.e. a HAP Hap5 (DXT5 RGBA) frame. Driven by the `straightAlpha`
@@ -231,13 +202,8 @@ public final class DXVRenderer {
     /// premultiplied DXV dxt5/YG10 under both the `.black` (blend-off →
     /// transparent=black) and `.checkerboard` (premultiplied blend) paths.
     /// Every non-Hap5 upload (DXV dxt1/dxt5, HQ, HapQ, HapM) leaves it false,
-    /// so those outputs are byte-identical to before. Mirrors the
-    /// `lastUploadIsHapM` flag mechanism.
+    /// so those outputs are byte-identical to before.
     private var lastUploadIsHap5Straight: Bool = false
-    private var hapMCrop = TextureCrop()
-    private var hapMLastPaddedWidth: Int = 0
-    private var hapMLastHeight: Int = 0
-    private var hapMHasUpload: Bool = false
 
     // MARK: - GL objects: HQ path (DXVKit block streams, compressed upload)
 
@@ -274,14 +240,6 @@ public final class DXVRenderer {
     private var bgULocLight: GLint = -1
     private var bgULocDark: GLint = -1
     private var bgULocCellPx: GLint = -1
-
-    // MARK: - Constants for S3TC (not always exposed in macOS GL headers)
-
-    private static let GL_COMPRESSED_RGB_S3TC_DXT1_EXT: GLenum = 0x83F0
-    private static let GL_COMPRESSED_RGBA_S3TC_DXT5_EXT: GLenum = 0x83F3
-    /// BC4 / RGTC1 — single-channel red, 8 B/block. Core since GL 3.0.
-    /// Used by the HapM alpha plane [Slice 3].
-    private static let GL_COMPRESSED_RED_RGTC1: GLenum = 0x8DBB
 
     // MARK: - Lifecycle
 
@@ -378,57 +336,20 @@ public final class DXVRenderer {
         hqTextureLuma = Self.makeBlockTexture()
         hqTextureChroma = Self.makeBlockTexture()
 
-        // ---------- Hap Q program [Slice 2 — additive] ----------
-        // Reuses the shared vertex shader (the crop rule), new fragment
-        // shader applies scaled-YCoCg → RGB to a single DXT5 sample.
-        hapQProgram = compileProgram(vertex: vertexShaderSrc, fragment: hapQFragmentShaderSrc)
-        if hapQProgram == 0 {
-            print("Glance/dxvrender: Hap Q shader program creation FAILED")
+        // ---------- Hap Q / HapM program (blocks decoded in the shader) ----------
+        hapYProgram = compileProgram(vertex: vertexShaderSrc, fragment: hapYFragmentShaderSrc)
+        if hapYProgram == 0 {
+            print("Glance/dxvrender: Hap Q / HapM shader program creation FAILED")
             return
         }
-        hapQULocTexture  = glGetUniformLocation(hapQProgram, "uTexture")
-        hapQCropLoc      = CropLocations(program: hapQProgram)
-
-        // Hap Q texture: a single DXT5 (S3TC) texture carrying scaled
-        // YCoCg. GL_NEAREST so the per-block scale channel is point-
-        // sampled (never interpolated across block edges) — see the
-        // section comment above for why this differs from the DXT path.
-        glGenTextures(1, &hapQTexture)
-        glBindTexture(GLenum(GL_TEXTURE_2D), hapQTexture)
-        glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_MIN_FILTER), GL_NEAREST)
-        glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_MAG_FILTER), GL_NEAREST)
-        glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_WRAP_S), GL_CLAMP_TO_EDGE)
-        glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_WRAP_T), GL_CLAMP_TO_EDGE)
-        glBindTexture(GLenum(GL_TEXTURE_2D), 0)
-
-        // ---------- HapM program [Slice 3 — additive, two-texture] ----------
-        // Reuses the shared vertex shader. New fragment shader samples the
-        // color DXT5 (scaled-YCoCg → RGB) AND the BC4 alpha texture, and
-        // outputs premultiplied (rgb*a, a).
-        hapMProgram = compileProgram(vertex: vertexShaderSrc, fragment: hapMFragmentShaderSrc)
-        if hapMProgram == 0 {
-            print("Glance/dxvrender: HapM shader program creation FAILED")
-            return
-        }
-        hapMULocColor    = glGetUniformLocation(hapMProgram, "uTextureColor")
-        hapMULocAlpha    = glGetUniformLocation(hapMProgram, "uTextureAlpha")
-        hapMCropLoc      = CropLocations(program: hapMProgram)
-
-        // HapM color (DXT5 S3TC) + alpha (BC4 RGTC1) textures. Both
-        // GL_NEAREST: color scale channel must not interpolate across
-        // block edges; alpha point-sampled to match the CPU reference.
-        var hapMTexes: [GLuint] = [0, 0]
-        glGenTextures(2, &hapMTexes)
-        hapMColorTexture = hapMTexes[0]
-        hapMAlphaTexture = hapMTexes[1]
-        for tex in hapMTexes {
-            glBindTexture(GLenum(GL_TEXTURE_2D), tex)
-            glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_MIN_FILTER), GL_NEAREST)
-            glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_MAG_FILTER), GL_NEAREST)
-            glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_WRAP_S), GL_CLAMP_TO_EDGE)
-            glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_WRAP_T), GL_CLAMP_TO_EDGE)
-        }
-        glBindTexture(GLenum(GL_TEXTURE_2D), 0)
+        hapYULocColor       = glGetUniformLocation(hapYProgram, "uBlocks")
+        hapYULocAlpha       = glGetUniformLocation(hapYProgram, "uAlphaBlocks")
+        hapYULocHasAlpha    = glGetUniformLocation(hapYProgram, "uHasAlpha")
+        hapYULocTexSize     = glGetUniformLocation(hapYProgram, "uTexSize")
+        hapYULocDisplaySize = glGetUniformLocation(hapYProgram, "uDisplaySize")
+        hapYCropLoc         = CropLocations(program: hapYProgram)
+        hapYColorTexture = Self.makeBlockTexture()
+        hapYAlphaTexture = Self.makeBlockTexture()
 
         // ---------- Background program (checkerboard pass) ----------
         // Reuses the shared VAO/VBO. The vertex shader is minimal —
@@ -445,7 +366,7 @@ public final class DXVRenderer {
         bgULocCellPx = glGetUniformLocation(bgProgram, "uCellPx")
 
         glReady = true
-        print("Glance/dxvrender: GL objects ready (dxtProgram=\(dxtProgram), hqProgram=\(hqProgram), hapQProgram=\(hapQProgram), hapMProgram=\(hapMProgram), bgProgram=\(bgProgram), vao=\(vao), vbo=\(vbo), dxtTex=\(dxtTexture), rgbaProgram=\(rgbaProgram), hqTex=luma\(hqTextureLuma)/chroma\(hqTextureChroma), hapQTex=\(hapQTexture), hapMTex=color\(hapMColorTexture)/alpha\(hapMAlphaTexture))")
+        print("Glance/dxvrender: GL objects ready (dxtProgram=\(dxtProgram), hqProgram=\(hqProgram), hapYProgram=\(hapYProgram), bgProgram=\(bgProgram), vao=\(vao), vbo=\(vbo), dxtTex=\(dxtTexture), rgbaProgram=\(rgbaProgram), hqTex=luma\(hqTextureLuma)/chroma\(hqTextureChroma), hapYTex=color\(hapYColorTexture)/alpha\(hapYAlphaTexture))")
     }
 
     // MARK: - Public API: DXT path
@@ -483,8 +404,7 @@ public final class DXVRenderer {
                                 last: &dxtLastBlocks) else { return false }
         glBindTexture(GLenum(GL_TEXTURE_2D), 0)
 
-        lastUploadIsHapQ = false   // [Slice 2] this is a plain DXT upload
-        lastUploadIsHapM = false   // [Slice 3]
+        lastUploadIsHapY = false
         lastUploadIsRGBA = false
         lastUploadIsHap5Straight = straightAlpha   // HAP Hap5 straight-alpha → premultiply in-shader
         lastUploadVariant = variant
@@ -514,8 +434,7 @@ public final class DXVRenderer {
                          GLenum(GL_RGBA), GLenum(GL_UNSIGNED_BYTE), buf.baseAddress)
         }
         glBindTexture(GLenum(GL_TEXTURE_2D), 0)
-        lastUploadIsHapQ = false
-        lastUploadIsHapM = false
+        lastUploadIsHapY = false
         lastUploadIsRGBA = true
         lastUploadIsHap5Straight = straightAlpha
         lastUploadVariant = .dxt5          // any non-HQ variant keeps the public display-dim API valid
@@ -553,8 +472,7 @@ public final class DXVRenderer {
             print("Glance/dxvrender: HQ block streams inconsistent (\(variant), coded \(frame.codedWidth)x\(frame.codedHeight), luma \(luma.count)/\(lumaGrid.byteCount), chroma \(chroma.count)/\(chromaGrid.byteCount))")
             return false
         }
-        lastUploadIsHapQ = false   // [Slice 2] this is a DXV3 HQ upload
-        lastUploadIsHapM = false   // [Slice 3]
+        lastUploadIsHapY = false
         lastUploadIsRGBA = false
         lastUploadIsHap5Straight = false   // HQ is its own premult-aware path
 
@@ -577,124 +495,62 @@ public final class DXVRenderer {
         return true
     }
 
-    // MARK: - Public API: Hap Q path [Slice 2 — additive]
+    // MARK: - Public API: Hap Q / HapM path
 
-    /// Upload a Hap Q (HapY) frame's DXT5 scaled-YCoCg blocks as a
-    /// compressed DXT5 texture, then flag the renderer to use the Hap Q
-    /// shader at draw time. Call from a context where GL is current.
-    ///
-    /// `dxt5Bytes` is the raw DXT5 block payload (after the HAP section
-    /// header + Snappy/chunked reassembly), re-padded by the caller to
-    /// the renderer's 16-pixel block-row stride — exactly the same
-    /// `HAPDXTRepad` layout the Slice-1 Hap5 path uses. `width`/`height`
-    /// are display dimensions; the renderer pads width to 16-pixel block
-    /// alignment for storage and crops it back via per-frame UV scaling
-    /// at draw time (same contract as `uploadFrame`).
-    ///
-    /// The DXT5 blocks are uploaded verbatim (reusing `uploadCompressed`,
-    /// internal format `GL_COMPRESSED_RGBA_S3TC_DXT5_EXT`) — the GPU
-    /// decompresses to RGBA at sample time, and the Hap Q fragment shader
-    /// reinterprets R=Co, G=Cg, B=per-block scale, A=Y. The scale falls
-    /// out of the texture sample per-fragment; it is NOT a global uniform.
+    /// Upload a Hap Q (HapY) frame: its BC3 (DXT5) scaled-YCoCg blocks,
+    /// re-padded by the caller to the 16-pixel block-column stride
+    /// (`HAPDXTRepad`, 16-byte blocks), at least `ceil(height / 4)` block
+    /// rows. The blocks go up unchanged as an integer texture and the shader
+    /// decodes them (R = Co, G = Cg, B = per-block scale, A = Y) into RGB
+    /// exactly as `HAPHQDecoder` does. `width` / `height` are display
+    /// dimensions; the crop is the shared `TextureCrop` rule.
     @discardableResult
     public func uploadHapQFrame(dxt5Bytes: Data, width: Int, height: Int) -> Bool {
-        ensureGLObjects()
-        guard glReady else { return false }
-
-        let paddedW = (width + 15) / 16 * 16
-        let needsRealloc = !hapQHasUpload
-            || hapQLastPaddedWidth != paddedW
-            || hapQLastHeight != height
-
-        glBindTexture(GLenum(GL_TEXTURE_2D), hapQTexture)
-        guard uploadCompressed(dxtBytes: dxt5Bytes, variant: .dxt5,
-                               width: paddedW, height: height,
-                               realloc: needsRealloc) else {
-            // S3TC unavailable or a malformed payload. Hap Q has no GPU
-            // fallback — the caller decides what to do. Surface
-            // the failure rather than render garbage.
-            print("Glance/dxvrender: Hap Q DXT5 upload failed")
-            return false
-        }
-
-        hapQLastPaddedWidth = paddedW
-        hapQLastHeight = height
-        hapQHasUpload = true
-
-        hapQCrop = TextureCrop(displayWidth: width, displayHeight: height,
-                               textureWidth: paddedW, textureHeight: height)
-
-        // Route render() to the Hap Q program. lastUploadVariant is left
-        // at .dxt5 so the public display-dimension API stays consistent;
-        // the isHapQ flag overrides the render path.
-        lastUploadIsHapQ = true
-        lastUploadIsHapM = false   // [Slice 3]
-        lastUploadIsRGBA = false
-        lastUploadIsHap5Straight = false   // Hap Q has its own (opaque) shader path
-        lastUploadVariant = .dxt5
-        lastUploadWidth = width
-        lastUploadHeight = height
-        hasUpload = true
-        return true
+        uploadHapY(color: dxt5Bytes, alpha: nil, width: width, height: height)
     }
 
-    // MARK: - Public API: HapM path [Slice 3 — additive]
-
-    /// Upload a HapM frame's two planes — scaled-YCoCg color (DXT5) and
-    /// BC4/RGTC1 alpha — as two compressed textures, then flag the
-    /// renderer to use the HapM two-texture composite shader at draw time.
-    /// Call from a context where GL is current.
-    ///
-    /// `colorDXT5` is the raw HapY DXT5 block payload, re-padded by the
-    /// caller to the renderer's 16-pixel block-row stride (blockBytes:16).
-    /// `alphaBC4` is the raw HapA BC4 block payload, re-padded to the SAME
-    /// 16-pixel width stride but at **blockBytes:8** (BC4 = 8 B/block, vs
-    /// DXT5's 16 — the silent-corruption trap). Both planes share the same
-    /// display dimensions; width is padded to 16-px block alignment for
-    /// storage and cropped back via per-frame UV scaling at draw time.
+    /// Upload a HapM frame: the HapY colour blocks (as `uploadHapQFrame`) and
+    /// the BC4 alpha blocks, re-padded to the same 16-pixel stride at 8 bytes
+    /// per block. Drawn premultiplied (rgb * a, a), like DXT5 / YG10.
     @discardableResult
     public func uploadHapMFrame(colorDXT5: Data, alphaBC4: Data,
                                 width: Int, height: Int) -> Bool {
+        uploadHapY(color: colorDXT5, alpha: alphaBC4, width: width, height: height)
+    }
+
+    private func uploadHapY(color: Data, alpha: Data?, width: Int, height: Int) -> Bool {
         ensureGLObjects()
-        guard glReady else { return false }
-
-        let paddedW = (width + 15) / 16 * 16
-        let needsRealloc = !hapMHasUpload
-            || hapMLastPaddedWidth != paddedW
-            || hapMLastHeight != height
-
-        // Color plane → DXT5 (S3TC) into hapMColorTexture.
-        glBindTexture(GLenum(GL_TEXTURE_2D), hapMColorTexture)
-        guard uploadCompressed(dxtBytes: colorDXT5, variant: .dxt5,
-                               width: paddedW, height: height,
-                               realloc: needsRealloc) else {
-            print("Glance/dxvrender: HapM color (DXT5) upload failed")
+        guard glReady, width > 0, height > 0 else { return false }
+        let blocksX = (width + 15) / 16 * 4
+        let rows = (height + 3) / 4
+        let colorGrid = BlockGrid(blocksX: blocksX, blocksY: color.count / (blocksX * 16), blockBytes: 16)
+        guard colorGrid.blocksY >= rows else {
+            print("Glance/dxvrender: Hap Q colour upload too short (\(color.count) B for \(width)x\(height))")
             return false
         }
-
-        // Alpha plane → BC4 / RGTC1 into hapMAlphaTexture.
-        glBindTexture(GLenum(GL_TEXTURE_2D), hapMAlphaTexture)
-        guard uploadCompressedFormat(dxtBytes: alphaBC4,
-                                     internalFormat: Self.GL_COMPRESSED_RED_RGTC1,
-                                     width: paddedW, height: height,
-                                     realloc: needsRealloc) else {
-            print("Glance/dxvrender: HapM alpha (BC4) upload failed")
-            return false
+        glBindTexture(GLenum(GL_TEXTURE_2D), hapYColorTexture)
+        guard Self.uploadBlocks(color, grid: colorGrid, last: &hapYLastColorBlocks) else { return false }
+        if let alpha {
+            let alphaGrid = BlockGrid(blocksX: blocksX, blocksY: alpha.count / (blocksX * 8), blockBytes: 8)
+            guard alphaGrid.blocksY >= rows else {
+                print("Glance/dxvrender: HapM alpha upload too short (\(alpha.count) B for \(width)x\(height))")
+                return false
+            }
+            glBindTexture(GLenum(GL_TEXTURE_2D), hapYAlphaTexture)
+            guard Self.uploadBlocks(alpha, grid: alphaGrid, last: &hapYLastAlphaBlocks) else { return false }
         }
+        glBindTexture(GLenum(GL_TEXTURE_2D), 0)
 
-        hapMLastPaddedWidth = paddedW
-        hapMLastHeight = height
-        hapMHasUpload = true
-        hapMCrop = TextureCrop(displayWidth: width, displayHeight: height,
-                               textureWidth: paddedW, textureHeight: height)
-
-        lastUploadIsHapM = true
-        lastUploadIsHapQ = false
+        lastUploadIsHapY = true
+        hapYHasAlpha = alpha != nil
         lastUploadIsRGBA = false
-        lastUploadIsHap5Straight = false   // HapM premultiplies in its own (renderHapM) shader
-        lastUploadVariant = .dxt5   // keeps the public display-dim API valid
+        lastUploadIsHap5Straight = false   // Hap Q / HapM have their own shader
+        lastUploadVariant = .dxt5          // keeps the public display-dim API valid
         lastUploadWidth = width
         lastUploadHeight = height
+        hapYTexSize = (blocksX * 4, colorGrid.blocksY * 4)
+        hapYCrop = TextureCrop(displayWidth: width, displayHeight: height,
+                               textureWidth: hapYTexSize.w, textureHeight: hapYTexSize.h)
         hasUpload = true
         return true
     }
@@ -727,19 +583,10 @@ public final class DXVRenderer {
             glBlendFunc(GLenum(GL_ONE), GLenum(GL_ONE_MINUS_SRC_ALPHA))
         }
 
-        if lastUploadIsHapM {
-            // [Slice 3] HapM: two-texture composite (color DXT5 + BC4
-            // alpha). Output is premultiplied (rgb*a, a), so under
-            // .checkerboard the premultiplied blend reveals the checker in
-            // transparent regions, and under .black (blend off) transparent
-            // writes black — identical compositing to DXT5/YG10.
-            renderHapM()
-        } else if lastUploadIsHapQ {
-            // [Slice 2] Hap Q: one DXT5 texture + scaled-YCoCg shader.
-            // HapY is opaque (alpha=1 every fragment), so under
-            // .checkerboard the premultiplied blend is a no-op and the
-            // output stays byte-identical to .black — same as DXT1/YCG6.
-            renderHapQ()
+        if lastUploadIsHapY {
+            // Hap Q is opaque (the blend is a no-op); HapM is drawn
+            // premultiplied, so it composites like DXT5 / YG10.
+            renderHapY()
         } else if lastUploadIsRGBA {
             renderRGBA()
         } else if variant.isHQ {
@@ -786,25 +633,22 @@ public final class DXVRenderer {
         glDrawArrays(GLenum(GL_TRIANGLE_STRIP), 0, 4)
     }
 
-    private func renderHapM() {
-        glUseProgram(hapMProgram)
+    private func renderHapY() {
+        glUseProgram(hapYProgram)
         glActiveTexture(GLenum(GL_TEXTURE0))
-        glBindTexture(GLenum(GL_TEXTURE_2D), hapMColorTexture)
-        glUniform1i(hapMULocColor, 0)
+        glBindTexture(GLenum(GL_TEXTURE_2D), hapYColorTexture)
+        glUniform1i(hapYULocColor, 0)
         glActiveTexture(GLenum(GL_TEXTURE1))
-        glBindTexture(GLenum(GL_TEXTURE_2D), hapMAlphaTexture)
-        glUniform1i(hapMULocAlpha, 1)
-        hapMCropLoc.set(hapMCrop)
+        // Hap Q has no alpha plane: keep a complete integer texture on the
+        // unit anyway (the shader doesn't read it), never an empty one.
+        glBindTexture(GLenum(GL_TEXTURE_2D), hapYHasAlpha ? hapYAlphaTexture : hapYColorTexture)
+        glUniform1i(hapYULocAlpha, 1)
+        glUniform1i(hapYULocHasAlpha, hapYHasAlpha ? 1 : 0)
+        glUniform2f(hapYULocTexSize, Float(hapYTexSize.w), Float(hapYTexSize.h))
+        glUniform2i(hapYULocDisplaySize, GLint(lastUploadWidth), GLint(lastUploadHeight))
+        hapYCropLoc.set(hapYCrop)
         glDrawArrays(GLenum(GL_TRIANGLE_STRIP), 0, 4)
-    }
-
-    private func renderHapQ() {
-        glUseProgram(hapQProgram)
         glActiveTexture(GLenum(GL_TEXTURE0))
-        glBindTexture(GLenum(GL_TEXTURE_2D), hapQTexture)
-        glUniform1i(hapQULocTexture, 0)
-        hapQCropLoc.set(hapQCrop)
-        glDrawArrays(GLenum(GL_TRIANGLE_STRIP), 0, 4)
     }
 
     private func renderHQ(variant: Variant) {
@@ -871,77 +715,6 @@ public final class DXVRenderer {
             return false
         }
         last = grid
-        return true
-    }
-
-    // MARK: - Private upload helpers (compressed, Hap Q / HapM)
-
-    /// Compressed S3TC upload (Hap Q / HapM colour). Returns true if the
-    /// upload succeeded with no GL error.
-    private func uploadCompressed(dxtBytes: Data, variant: Variant,
-                                  width: Int, height: Int,
-                                  realloc: Bool) -> Bool {
-        let internalFormat: GLenum
-        switch variant {
-        case .dxt1: internalFormat = Self.GL_COMPRESSED_RGB_S3TC_DXT1_EXT
-        case .dxt5: internalFormat = Self.GL_COMPRESSED_RGBA_S3TC_DXT5_EXT
-        default:    return false
-        }
-        // Drain any pre-existing error so we don't blame the previous
-        // operation on this upload.
-        while glGetError() != GLenum(GL_NO_ERROR) {}
-
-        dxtBytes.withUnsafeBytes { buf in
-            guard let base = buf.baseAddress else { return }
-            if realloc {
-                glCompressedTexImage2D(
-                    GLenum(GL_TEXTURE_2D), 0, internalFormat,
-                    GLsizei(width), GLsizei(height), 0,
-                    GLsizei(dxtBytes.count), base)
-            } else {
-                glCompressedTexSubImage2D(
-                    GLenum(GL_TEXTURE_2D), 0, 0, 0,
-                    GLsizei(width), GLsizei(height), internalFormat,
-                    GLsizei(dxtBytes.count), base)
-            }
-        }
-        let err = glGetError()
-        if err != GLenum(GL_NO_ERROR) {
-            print(String(format: "Glance/dxvrender: compressed upload failed (GL error 0x%X)", err))
-            return false
-        }
-        return true
-    }
-
-    /// [Slice 3] Format-explicit compressed upload. Same shape as
-    /// `uploadCompressed` (which switches on Variant for the S3TC formats)
-    /// but takes the GL internal format directly, so the HapM alpha plane
-    /// can upload BC4 / `GL_COMPRESSED_RED_RGTC1` without adding a Variant
-    /// case. The existing `uploadCompressed` is left byte-identical.
-    /// Operates on the currently-bound texture (caller binds).
-    private func uploadCompressedFormat(dxtBytes: Data, internalFormat: GLenum,
-                                        width: Int, height: Int,
-                                        realloc: Bool) -> Bool {
-        while glGetError() != GLenum(GL_NO_ERROR) {}
-        dxtBytes.withUnsafeBytes { buf in
-            guard let base = buf.baseAddress else { return }
-            if realloc {
-                glCompressedTexImage2D(
-                    GLenum(GL_TEXTURE_2D), 0, internalFormat,
-                    GLsizei(width), GLsizei(height), 0,
-                    GLsizei(dxtBytes.count), base)
-            } else {
-                glCompressedTexSubImage2D(
-                    GLenum(GL_TEXTURE_2D), 0, 0, 0,
-                    GLsizei(width), GLsizei(height), internalFormat,
-                    GLsizei(dxtBytes.count), base)
-            }
-        }
-        let err = glGetError()
-        if err != GLenum(GL_NO_ERROR) {
-            print(String(format: "Glance/dxvrender: format-compressed upload failed (GL error 0x%X)", err))
-            return false
-        }
         return true
     }
 
@@ -1150,89 +923,55 @@ public final class DXVRenderer {
     }
     """
 
-    /// Hap Q fragment shader [Slice 2 — additive]. Samples ONE DXT5
-    /// (S3TC) texture carrying scaled YCoCg and applies the inverse
-    /// transform, ported DIRECTLY from `HAPHQDecoder.unpackHapYToRGB`.
-    ///
-    /// Channel reinterpretation of the DXT5 sample (Castaño & van
-    /// Waveren, *Real-Time YCoCg-DXT Compression*, 2007 — the canonical
-    /// HapQ encoding):
-    ///   R (c.r) = Co + 0.5        (BC1 colour, 5-bit)
-    ///   G (c.g) = Cg + 0.5        (BC1 colour, 6-bit)
-    ///   B (c.b) = scale-encoding  (BC1 colour — CONSTANT per 4×4 block)
-    ///   A (c.a) = Y               (BC4 alpha, full resolution)
-    ///
-    /// Inverse (matches the CPU reference byte-for-byte):
-    ///   s  = 1 / ((255/8) * B + 1)        // per-fragment, from the sample
-    ///   Co = (R - 0.5) * s
-    ///   Cg = (G - 0.5) * s
-    ///   R' = Y + Co - Cg
-    ///   G' = Y + Cg
-    ///   B' = Y - Co - Cg
-    ///
-    /// The scale `s` is recovered from the per-fragment B sample — it is
-    /// NOT a global uniform. Because B is constant within a 4×4 block and
-    /// the texture is GL_NEAREST point-sampled, every fragment recovers
-    /// its block's exact scale, with no interpolation across block edges.
-    ///
-    /// Output is clamped to [0,1] then written; the framebuffer's
-    /// float→unorm8 rounding mirrors the CPU's `round(clamp(v*255,0,255))`,
-    /// so the GPU result matches `unpackHapYToRGB` within float-rounding
-    /// (the only residual divergence vs the CPU path is the GPU's own
-    /// S3TC block decode, the same ±1 565-endpoint class as every DXT
-    /// variant). HapY has no alpha → opaque.
-    private let hapQFragmentShaderSrc = """
+    /// Hap Q / HapM fragment shader: decodes the BC3 scaled-YCoCg colour
+    /// block (four-colour BC1 R = Co, G = Cg, B = scale; BC4 A = Y, all
+    /// DXVKit's truncated 8-bit palettes, as `CPURender.unpackDXT5ToRGBA`)
+    /// and, for HapM, the BC4 alpha block (`bc4Pal8`, as `BC4BC5Unpack`),
+    /// then `HAPHQDecoder`'s inverse in exact integers (`hapYCoCg`, units
+    /// of 1/255, D = B + 8):
+    ///   R' = Y + 8 (R - G) / D,  G' = Y + 4 (2G - 255) / D,
+    ///   B' = Y - 8 (R + G - 255) / D, each rounded half up and clamped.
+    /// The four display texels around the sample point blend bilinearly
+    /// (exact at 1:1, like the DXT program); HapM is drawn premultiplied.
+    private let hapYFragmentShaderSrc = """
     #version 330 core
     in vec2 vTex;
     out vec4 fragColor;
-    uniform sampler2D uTexture;
+    uniform usampler2D uBlocks;       // BC3 scaled YCoCg (GL_RGBA32UI)
+    uniform usampler2D uAlphaBlocks;  // BC4 alpha (GL_RG32UI), HapM only
+    uniform int uHasAlpha;
+    uniform vec2 uTexSize;
+    uniform ivec2 uDisplaySize;
     \(DXVRenderer.cropFragmentSrc)
+    \(DXVRenderer.blockDecodeSrc)
+    \(DXVRenderer.hapYCoCgSrc)
+    vec4 texel(ivec2 p) {
+        uvec4 w = texelFetch(uBlocks, p >> 2, 0);
+        uint i = blockTexel(p);
+        vec3 rgb = vec3(hapYCoCg(bc1Colour(w.zw, i, true), bc4Pal8(w.xy, i)));
+        float a = uHasAlpha == 1 ? float(bc4Pal8(texelFetch(uAlphaBlocks, p >> 2, 0).xy, i)) : 255.0;
+        return vec4(rgb, a);
+    }
     void main() {
-        vec4 c = texture(uTexture, cropUV(vTex));
-        // c.rgb = scaled-YCoCg colour (BC1), c.a = Y (BC4).
-        float s  = 1.0 / ((255.0 / 8.0) * c.b + 1.0);
-        float co = (c.r - 0.5) * s;
-        float cg = (c.g - 0.5) * s;
-        float y  = c.a;
-        vec3 rgb = vec3(y + co - cg,   // R'
-                        y + cg,        // G'
-                        y - co - cg);  // B'
-        fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
+        vec2 p = samplePoint(cropUV(vTex), uTexSize);
+        vec2 f = p - floor(p);
+        ivec2 a = clamp(ivec2(floor(p)), ivec2(0), uDisplaySize - 1);
+        ivec2 b = clamp(ivec2(floor(p)) + 1, ivec2(0), uDisplaySize - 1);
+        vec4 c = mix(mix(texel(a), texel(ivec2(b.x, a.y)), f.x),
+                     mix(texel(ivec2(a.x, b.y)), texel(b), f.x), f.y) / 255.0;
+        if (uHasAlpha == 1) c.rgb *= c.a;
+        fragColor = c;
     }
     """
 
-    /// HapM fragment shader [Slice 3 — additive, TWO textures]. Samples
-    /// the color DXT5 (scaled-YCoCg, the EXACT Slice-2 Hap Q transform —
-    /// identical math, verified clean by the isolation gate) AND a separate
-    /// BC4/RGTC1 alpha texture (single-channel red), then composites them
-    /// in one fragment.
-    ///
-    /// Output is PREMULTIPLIED `vec4(rgb*a, a)` so it composites identically
-    /// to DXV3 DXT5/YG10 under both background modes: under `.black` (blend
-    /// off) transparent fragments write `rgb*0 = 0` → black; under
-    /// `.checkerboard` the premultiplied-alpha blend `(GL_ONE,
-    /// GL_ONE_MINUS_SRC_ALPHA)` reveals the checker in transparent regions.
-    /// No blend-state changes vs the existing pipeline.
-    private let hapMFragmentShaderSrc = """
-    #version 330 core
-    in vec2 vTex;
-    out vec4 fragColor;
-    uniform sampler2D uTextureColor;   // DXT5 scaled-YCoCg (HapY)
-    uniform sampler2D uTextureAlpha;   // BC4 / RGTC1 red = alpha (HapA)
-    \(DXVRenderer.cropFragmentSrc)
-    void main() {
-        vec2 uv = cropUV(vTex);
-        vec4 c = texture(uTextureColor, uv);
-        // Same scaled-YCoCg → RGB as the Hap Q shader.
-        float s  = 1.0 / ((255.0 / 8.0) * c.b + 1.0);
-        float co = (c.r - 0.5) * s;
-        float cg = (c.g - 0.5) * s;
-        float y  = c.a;
-        vec3 rgb = clamp(vec3(y + co - cg, y + cg, y - co - cg), 0.0, 1.0);
-        // BC4 alpha plane: the decoded value is in the red channel.
-        float a = texture(uTextureAlpha, uv).r;
-        // Premultiplied output (matches DXT5/YG10 compositing).
-        fragColor = vec4(rgb * a, a);
+    /// `HAPHQDecoder.hapYCoCgToRGB` in GLSL (same integers): scaled YCoCg
+    /// (R = Co, G = Cg, B = scale, Y) to 8-bit RGB.
+    private static let hapYCoCgSrc = """
+    int hapRound(int v, int d) { return v <= 0 ? 0 : min(255, (2 * v + d) / (2 * d)); }
+    uvec3 hapYCoCg(uvec3 c, uint yy) {
+        int r = int(c.r), g = int(c.g), d = int(c.b) + 8, y = int(yy) * d;
+        return uvec3(hapRound(y + 8 * (r - g), d), hapRound(y + 4 * (2 * g - 255), d),
+                     hapRound(y - 8 * (r + g - 255), d));
     }
     """
 

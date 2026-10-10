@@ -81,6 +81,9 @@ public final class EncodePipeline {
     /// default. Callers encoding DXT1 or known-opaque sources can pass
     /// `.noneSkipLast` to force α=255 on the encoder side.
     public let sourceAlphaInfo: CGImageAlphaInfo
+    /// v1.6.0: the per-source "Alpha Type" for DXV sources (their files do
+    /// not say): `.premultiplied` un-premultiplies on read (`DxvSourceReader`).
+    public let sourceAlphaType: SourceAlphaType
     /// Phase 8C-a — optional source-frame range. nil = encode the full
     /// source. When set, only frames in `[lowerBound, upperBound)` are
     /// written. Frames before `lowerBound` are read-and-discarded (no
@@ -143,6 +146,7 @@ public final class EncodePipeline {
         makeWriter: @escaping WriterFactory,
         progress: ProgressCallback? = nil,
         sourceAlphaInfo: CGImageAlphaInfo = .last,
+        sourceAlphaType: SourceAlphaType = .default,
         frameRange: Range<Int>? = nil,
         outputSize: OutputSize = .original,
         resizeQuality: ResizeQuality = .auto,
@@ -159,6 +163,7 @@ public final class EncodePipeline {
             },
             progress: progress,
             sourceAlphaInfo: sourceAlphaInfo,
+            sourceAlphaType: sourceAlphaType,
             frameRange: frameRange,
             outputSize: outputSize,
             resizeQuality: resizeQuality,
@@ -176,6 +181,7 @@ public final class EncodePipeline {
         makeSink: @escaping SinkFactory,
         progress: ProgressCallback? = nil,
         sourceAlphaInfo: CGImageAlphaInfo = .last,
+        sourceAlphaType: SourceAlphaType = .default,
         frameRange: Range<Int>? = nil,
         outputSize: OutputSize = .original,
         resizeQuality: ResizeQuality = .auto,
@@ -187,6 +193,7 @@ public final class EncodePipeline {
         self.makeSink = makeSink
         self.progress = progress
         self.sourceAlphaInfo = sourceAlphaInfo
+        self.sourceAlphaType = sourceAlphaType
         self.frameRange = frameRange
         self.outputSize = outputSize
         self.resizeQuality = resizeQuality
@@ -201,7 +208,7 @@ public final class EncodePipeline {
         let reader: SourceFrameReader
         do {
             reader = try await makeSourceReader(
-                for: sourceURL, sourceAlphaInfo: sourceAlphaInfo)
+                for: sourceURL, sourceAlphaInfo: sourceAlphaInfo, alphaType: sourceAlphaType)
         } catch let e as SourceReaderError {
             // Surface as a typed pipeline error so callers (EncodeQueue,
             // tests) can render a coherent message.

@@ -98,9 +98,8 @@ All other files under `Sources/` are GlEnc original work under the MIT License.
 | Package | Pin | Licence | Used for |
 |---|---|---|---|
 | AmritusG/dxvkit (DXVKit) | exact 1.0.0 | MIT | DXV3 encoding (all four variants) and DXV source reading |
-| AmritusG/glance (GlanceCore, GlancePlayback) | exact 0.17.1 | MIT; its vendored C Snappy (`SnappyC`, from andikleen/snappy-c) is BSD-3-Clause; its `DXV1PacketDecoder` (liblzf port) is BSD-2-Clause | HAP source decoding, DXV / HAP detection, the preview player |
+| AmritusG/glance (GlanceCore, GlancePlayback) | exact 0.17.3 | MIT; its vendored C Snappy (`SnappyC`, from andikleen/snappy-c) is BSD-3-Clause; its `DXV1PacketDecoder` (liblzf port) is BSD-2-Clause | HAP source decoding, DXV / HAP detection, the preview player |
 | apple/swift-argument-parser | from 1.3.0 | Apache-2.0 | `glenc-cli` argument parsing only |
-| apple/swift-system | (transitive, via swift-argument-parser) | Apache-2.0 | — |
 
 GlEnc v1.3.0 and earlier also depended on lovetodream/swift-snappy (BSD-3,
 via an AmritusG fork) as a test oracle; v1.4.0 drops it (its `SnappyC` target
@@ -113,7 +112,7 @@ description).
 # In this public mirror
 
 DXVKit 1.0.0 (`Sources/CDXVKit`, `Sources/DXVKit`; MIT, `LICENSES/DXVKit-LICENSE.txt`) and
-Glance 0.17.1's GlanceCore, GlancePlayback and SnappyC (`Sources/GlanceCore`,
+Glance 0.17.3's GlanceCore, GlancePlayback and SnappyC (`Sources/GlanceCore`,
 `Sources/GlancePlayback`, `Sources/SnappyC`; MIT, `LICENSES/Glance-LICENSE.txt`; SnappyC
 BSD-3-Clause, `Sources/SnappyC/LICENSE`; GlanceCore's `DXV1PacketDecoder.swift` BSD-2-Clause,
 `LICENSES/BSD-2-Clause.txt`) are copied in as source, unchanged from those tagged releases,

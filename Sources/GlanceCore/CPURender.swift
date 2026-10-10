@@ -99,6 +99,20 @@ public enum CPURender {
         }
     }
 
+    // MARK: - Whole packet (exact)
+
+    /// One DXV sample (any generation, any variant, any size) → display-size
+    /// CGImage, decoded entirely by DXVKit: its RGBA, exactly (raw texels,
+    /// not premultiplied, alpha last; HQ in Resolume Arena's colour). This is
+    /// the exact CPU path for frame N (`DXVThumbnail` covers frame 0). The
+    /// payload-level plane API (`DXVHQDecoder` + `cgImageFromHQ`) can't be
+    /// exact for HQ: its 8-bit planes truncate the BC4 palette before the
+    /// YCoCg math, which lands within 2 of DXVKit.
+    public static func cgImageFromPacket(_ packet: Data, index: DXVMovieIndex) throws -> CGImage {
+        let rgba = try DXVKitBridge.rgba(packet: packet, index: index)
+        return try cgImageFromRGBA(rgba: rgba, width: index.width, height: index.height)
+    }
+
     // MARK: - HQ planes
 
     /// HQ planes (Y / Co / Cg / optional A, e.g. from `DXVHQDecoder`) → CGImage,
@@ -122,10 +136,19 @@ public enum CPURender {
               cg.count == chromaWidth * chromaHeight else {
             throw RenderError.dimensionMismatch("Co/Cg plane size mismatch")
         }
+        // Nearest chroma reads sample (row / 2, col / 2), clamped to the
+        // plane. Exact when the plane covers ceil(height / 2) x ceil(width / 2)
+        // (what DXVHQDecoder returns since v0.17.2). An empty chroma plane
+        // can't be clamped into: a 1-row frame with a 0-row plane used to
+        // index out of range here (v0.17.1 crash, found by MaCrate 0.14.0).
+        let outW = displayWidth ?? width
+        guard outW <= width, height == 0 || outW == 0 || (chromaWidth > 0 && chromaHeight > 0) else {
+            throw RenderError.dimensionMismatch(
+                "Co/Cg plane \(chromaWidth)x\(chromaHeight) / width \(outW) of \(width) can't cover \(outW)x\(height)")
+        }
         if let a = a, a.count != width * height {
             throw RenderError.dimensionMismatch("A plane \(a.count) != \(width)*\(height)")
         }
-        let outW = displayWidth ?? width
         var rgba = [UInt8](repeating: 0xFF, count: outW * height * 4)
         for row in 0..<height {
             let cRow = min(chromaHeight - 1, row / 2) * chromaWidth

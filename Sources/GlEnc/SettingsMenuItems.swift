@@ -30,6 +30,17 @@ struct AlphaMenuItems: View {
     }
 }
 
+/// v1.6.0 — the source's "Alpha Type" (Arena's names). Acts on DXV sources
+/// with alpha only; stored on every job.
+struct SourceAlphaTypeMenuItems: View {
+    let apply: (EncodeQueue.SettingsEdit) -> Void
+    var body: some View {
+        ForEach(SourceAlphaType.allCases, id: \.self) { t in
+            Button(t.label) { apply { s, _ in s.setSourceAlphaType(t) } }
+        }
+    }
+}
+
 struct ProResVariantMenuItems: View {
     let apply: (EncodeQueue.SettingsEdit) -> Void
     var body: some View {
@@ -107,6 +118,7 @@ struct QueueSettingsSubmenus: View {
     var body: some View {
         Menu("Codec") { CodecFamilyMenuItems(apply: apply) }
         Menu("Alpha (DXV / HAP)") { AlphaMenuItems(apply: apply) }
+        Menu("Source Alpha Type (DXV sources)") { SourceAlphaTypeMenuItems(apply: apply) }
         Menu("ProRes Variant") { ProResVariantMenuItems(apply: apply) }
         Menu("Container (H.264 / HEVC)") { ContainerMenuItems(apply: apply) }
         Divider()

@@ -282,7 +282,7 @@ public final class HAPMPlayer: @unchecked Sendable {
     /// Walk the 0x0D outer of a HapM packet, decode each inner section,
     /// and return the raw (color DXT5, alpha BC4) block payloads. Throws
     /// if the outer isn't 0x0D or either plane is missing.
-    private static func extractPlanes(from pkt: Data) throws -> (color: Data, alpha: Data) {
+    public static func extractPlanes(from pkt: Data) throws -> (color: Data, alpha: Data) {
         let outer = try HAPPacketDecoder.parseSectionHeader(packet: pkt)
         guard outer.sectionType == 0x0D else {
             throw NSError(domain: "HAPMPlayer", code: 4, userInfo: [

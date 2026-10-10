@@ -351,6 +351,14 @@ struct JobCardView: View {
                 .help("This ProRes variant has no alpha channel. Choose ProRes 4444 to keep the source's transparency.")
             }
 
+            // ── Source Alpha Type (v1.6.0) — what the SOURCE's colour is.
+            //    DXV alpha sources: the user's choice (a DXV file doesn't
+            //    say), with the spec 8.5 hint; HAP / ProRes / HEVC alpha:
+            //    stated by the format, shown disabled; no alpha: hidden.
+            if let report = job.sourceAlphaReport {
+                sourceAlphaTypeControl(report)
+            }
+
             // ── HAP chunks stepper (Slice 4) — advanced knob, last in the
             //    row (debug-params-last). HAP family only: chunked sections
             //    are a HAP-only feature, so DXV3 (DXT1/DXT5/YCG6/YG10) never
@@ -1064,6 +1072,44 @@ struct JobCardView: View {
     /// queue refreshes the auto-name when codec / container changed.
     private func edit(_ e: EncodeQueue.SettingsEdit) {
         queue.applySettings(to: job.id, e)
+    }
+
+    /// v1.6.0 — the source's "Alpha Type" (Arena's name; default
+    /// Premultiplied) and the spec 8.5 hint. The hint never changes it.
+    @ViewBuilder
+    private func sourceAlphaTypeControl(_ report: SourceAlphaReport) -> some View {
+        switch report.kind {
+        case .none:
+            EmptyView()
+        case .choosable:
+            HStack(spacing: 6) {
+                Menu {
+                    SourceAlphaTypeMenuItems(apply: edit)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.up.chevron.down")
+                            .rowChevronStyle()
+                        Text("Alpha Type: \(job.sourceAlphaType.label)")
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .disabled(!isMutable)
+                .help("What this DXV source's colour is. A DXV file doesn't say; Resolume Arena calls this \"Alpha Type\" (default Premultiplied). Premultiplied: GlEnc un-premultiplies the colour on read, so every output gets straight colour. Straight: passed through.")
+                if let look = report.look {
+                    Text(look.label)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .help("A reading of the first frames (DXV spec 8.5): \(report.samples) semi-transparent sample pixels, \(String(format: "%.1f", report.share * 100)) % brighter than their alpha. Premultiplied colour can't be brighter than alpha. A hint only: it never changes the setting.")
+                }
+            }
+        case .stated(let type, let by):
+            Text("Alpha Type: \(type.label) (\(by))")
+                .foregroundColor(.secondary)
+                .fixedSize()
+                .help("\(by) states its alpha, so GlEnc reads it as the file says.")
+        }
     }
 
     /// Select a DXV/HAP family tier (keeps the current alpha mode).

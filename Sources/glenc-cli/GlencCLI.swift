@@ -83,6 +83,10 @@ struct GlencCLI: AsyncParsableCommand {
             help: "HAP chunked-section count (hap1/hap5/hapy/hapa/hapm). 1 = single section (default); 2-64 = multi-chunk (Hap1 0xCB / Hap5 0xCE / HapY 0xCF / HapA 0xC1; HapM 0x0D wrapping 0xCF color + 0xC1 alpha).")
     var chunks: Int = 1
 
+    @Option(name: .long,
+            help: "What a DXV source's colour is (Resolume Arena's \"Alpha Type\"): premultiplied (default) or straight. A DXV file doesn't say; premultiplied colour is un-premultiplied on read. Ignored for other sources (HAP / ProRes / HEVC alpha are read as their format states).")
+    var alphaType: String = SourceAlphaType.default.rawValue
+
     @Option(name: .long, help: "Encoding-software string stamped into udta/©swr.")
     var writerVersion: String = "glenc-cli 1.0.0"
 
@@ -111,6 +115,9 @@ struct GlencCLI: AsyncParsableCommand {
         }
         guard let am = AspectMode(rawValue: aspect) else {
             throw ValidationError("invalid --aspect: \(aspect) (letterbox|distortToFill)")
+        }
+        guard let sourceAlphaType = SourceAlphaType(rawValue: alphaType.lowercased()) else {
+            throw ValidationError("invalid --alpha-type: \(alphaType) (premultiplied|straight)")
         }
 
         // Audio pass-through (optional). Read via the shared core reader so
@@ -145,7 +152,8 @@ struct GlencCLI: AsyncParsableCommand {
             cropRect: cropRect,
             frameRange: frameRange,
             writerVersion: writerVersion,
-            hapChunks: chunks)
+            hapChunks: chunks,
+            sourceAlphaType: sourceAlphaType)
 
         if verbose {
             FileHandle.standardError.write(Data("""
@@ -156,6 +164,7 @@ struct GlencCLI: AsyncParsableCommand {
               size:    \(outputSize)
               crop:    \(cropRect.map(String.init(describing:)) ?? "none")
               trim:    \(frameRange.map { "\($0.lowerBound)..<\($0.upperBound)" } ?? "full")
+              alpha type (DXV source): \(sourceAlphaType.label)
 
             """.utf8))
         }

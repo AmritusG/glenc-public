@@ -131,19 +131,17 @@ internal func validateSourceGeometry(
     }
 }
 
-/// Compressor FourCCs that route to `DxvSourceReader`. Covers both
-/// stsd-direct texture tags (Alley-style outputs) and the DXV3 version
-/// tags (ffmpeg / GlEnc outputs).
-private let dxvFourCCs: Set<String> = ["DXT1", "DXT5", "YCG6", "YG10", "DXDI", "DXD3"]
-
 /// Inspect the source file and return the appropriate reader. Routes
 /// DXV3 sources to `DxvSourceReader`; everything else to `AVAssetReaderSourceReader`.
+/// `alphaType` (v1.6.0, the per-source "Alpha Type" switch) applies to DXV
+/// sources only: their files do not say (`SourceAlpha`).
 public func makeSourceReader(
     for url: URL,
-    sourceAlphaInfo: CGImageAlphaInfo
+    sourceAlphaInfo: CGImageAlphaInfo,
+    alphaType: SourceAlphaType = .default
 ) async throws -> SourceFrameReader {
-    if let cc = DXVDetector.compressorFourCC(at: url), dxvFourCCs.contains(cc) {
-        return try DxvSourceReader(url: url)
+    if let cc = DXVDetector.compressorFourCC(at: url), dxvSourceFourCCs.contains(cc) {
+        return try DxvSourceReader(url: url, alphaType: alphaType)
     }
     // HAP video source (Hap1/Hap5/HapY/HapM) — decode to BGRA frames via
     // GlanceCore's CPU HAP decoder, ahead of the AVAssetReader fallback
@@ -169,6 +167,9 @@ public final class AVAssetReaderSourceReader: SourceFrameReader {
     private let reader: AVAssetReader
     private let trackOutput: AVAssetReaderTrackOutput
     private let sourceAlphaInfo: CGImageAlphaInfo
+    /// The format states premultiplied alpha and the output keeps alpha:
+    /// frames are copied and un-premultiplied on read (v1.6.0).
+    public let unpremultipliesOnRead: Bool
 
     public init(url: URL, sourceAlphaInfo: CGImageAlphaInfo) async throws {
         let asset = AVURLAsset(url: url)
@@ -183,34 +184,27 @@ public final class AVAssetReaderSourceReader: SourceFrameReader {
 
         let w = Int(naturalSize.width.rounded())
         let h = Int(naturalSize.height.rounded())
-        // v1.5.0 — the rate comes from the track's sample timing
-        // (FrameRateResolver): sample count / duration, then the dominant
-        // sample delta, snapped to the exact standard rational; else the
-        // #14 part-1 rule (minFrameDuration, then nominalFrameRate).
-        // minFrameDuration alone is the SHORTEST sample: a 25 fps clip with
-        // jittered 23/25-tick samples read as 26.09 fps and was refused.
-        var durations: [Int64] = []
-        var sampleTimescale: Int32 = 0
-        if (try? await videoTrack.load(.canProvideSampleCursors)) == true,
-           let cursor = videoTrack.makeSampleCursorAtFirstSampleInDecodeOrder() {
-            repeat {
-                let d = cursor.currentSampleDuration
-                if d.isValid, d.isNumeric {
-                    durations.append(d.value)
-                    sampleTimescale = d.timescale
-                }
-            } while cursor.stepInDecodeOrder(byCount: 1) == 1
+        // v1.6.0 — the rate is GlanceCore.FrameTiming's (Glance 0.17.3, the
+        // one frame-timing rule of every app): the samples' own mean (count
+        // / summed sample duration, exact), then the dominant sample delta,
+        // snapped to the exact standard rational within 0.1 %, then
+        // minFrameDuration when it agrees with nominalFrameRate, then the
+        // nominal rate. Replaces v1.5.0's FrameRateResolver, which took the
+        // mean over the TRACK duration (movie timescale 1/1000 s): a
+        // 40-frame 60 fps source read 59.94. The exact rational converts to
+        // a Double the writer maps onto its (timescale, delta) pair exactly
+        // (fps x 512 for integer rates, (N x 1000, 1001) for NTSC).
+        let timing = try await FrameTiming.load(track: videoTrack)
+        // v1.6.0 — alpha as the file states it: a format description whose
+        // alpha-channel mode is premultiplied (HEVC with alpha can say so) is
+        // un-premultiplied on read; everything else (ProRes 4444, HEVC
+        // straight) is straight as decoded.
+        let formats = try await videoTrack.load(.formatDescriptions)
+        let statedMode = formats.first.flatMap {
+            (CMFormatDescriptionGetExtensions($0) as? [String: Any])?[kCMFormatDescriptionExtension_AlphaChannelMode as String] as? String
         }
-        let trackRange = try await videoTrack.load(.timeRange)
-        let trackSec = CMTimeGetSeconds(trackRange.duration)
-        let mfd: (value: Int64, timescale: Int32)? =
-            (minFrameDuration.isValid && minFrameDuration.isNumeric)
-            ? (minFrameDuration.value, minFrameDuration.timescale) : nil
-        let resolved = FrameRateResolver.resolve(
-            sampleDurations: durations, timescale: sampleTimescale,
-            trackDuration: trackSec.isFinite ? trackSec : 0,
-            minFrameDuration: mfd, nominalFrameRate: nominalFrameRate)
-        let fps = resolved.fps
+        let keepsAlpha = sourceAlphaInfo == .last || sourceAlphaInfo == .first
+        let fps = Double(timing.rateNumerator) / Double(timing.rateDenominator)
         let durSec = CMTimeGetSeconds(assetDuration)
         // Hardening Fix-Brief 1 — validate geometry/scalars at the reader
         // trust boundary, before the AVAssetReader is created and before
@@ -221,8 +215,8 @@ public final class AVAssetReaderSourceReader: SourceFrameReader {
         FileHandle.standardError.write(Data(
             ("[GlEnc/fps] nominalFrameRate=\(nominalFrameRate) " +
              "minFrameDuration=\(minFrameDuration.value)/\(minFrameDuration.timescale) " +
-             "samples=\(durations.count) trackDuration=\(trackSec) " +
-             "fps=\(fps) (from \(resolved.source.rawValue))\n").utf8))
+             "frames=\(timing.frameCount) " +
+             "fps=\(timing.rateNumerator)/\(timing.rateDenominator) (from \(timing.source.rawValue))\n").utf8))
 
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(
@@ -243,6 +237,8 @@ public final class AVAssetReaderSourceReader: SourceFrameReader {
         self.reader = reader
         self.trackOutput = output
         self.sourceAlphaInfo = sourceAlphaInfo
+        self.unpremultipliesOnRead = keepsAlpha
+            && statedMode == (kCMFormatDescriptionAlphaChannelMode_PremultipliedAlpha as String)
     }
 
     public func readNextFrame() throws -> PixelFrame? {
@@ -257,13 +253,41 @@ public final class AVAssetReaderSourceReader: SourceFrameReader {
             return nil
         }
         let pts = CMSampleBufferGetPresentationTimeStamp(sample)
-        guard let pb = CMSampleBufferGetImageBuffer(sample) else {
+        guard var pb = CMSampleBufferGetImageBuffer(sample) else {
             return nil
         }
+        if unpremultipliesOnRead { pb = try Self.straightCopy(of: pb) }
         return PixelFrame(
             pixelBuffer: pb,
             presentationTime: pts,
             alphaInfo: sourceAlphaInfo)
+    }
+}
+
+extension AVAssetReaderSourceReader {
+    /// A straight copy of a premultiplied BGRA buffer (the decoder's buffer
+    /// is shared, so it is not changed in place).
+    static func straightCopy(of src: CVPixelBuffer) throws -> CVPixelBuffer {
+        let w = CVPixelBufferGetWidth(src), h = CVPixelBufferGetHeight(src)
+        var out: CVPixelBuffer?
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, w, h, kCVPixelFormatType_32BGRA,
+                                         [kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any]] as CFDictionary, &out)
+        guard status == kCVReturnSuccess, let dst = out else { throw SourceReaderError.pixelBufferCreateFailed(status) }
+        CVPixelBufferLockBaseAddress(src, .readOnly); CVPixelBufferLockBaseAddress(dst, [])
+        defer { CVPixelBufferUnlockBaseAddress(src, .readOnly); CVPixelBufferUnlockBaseAddress(dst, []) }
+        guard let s = CVPixelBufferGetBaseAddress(src)?.assumingMemoryBound(to: UInt8.self),
+              let d = CVPixelBufferGetBaseAddress(dst)?.assumingMemoryBound(to: UInt8.self) else { return dst }
+        let ss = CVPixelBufferGetBytesPerRow(src), ds = CVPixelBufferGetBytesPerRow(dst)
+        for y in 0..<h {
+            let sr = s + y * ss, dr = d + y * ds
+            for x in 0..<w {
+                let o = x * 4
+                // BGRA: the rule is per channel, so the order does not matter.
+                let (b, g, r, a) = AlphaNormalization.unpremultiply.apply(r: sr[o], g: sr[o + 1], b: sr[o + 2], a: sr[o + 3])
+                dr[o] = b; dr[o + 1] = g; dr[o + 2] = r; dr[o + 3] = a
+            }
+        }
+        return dst
     }
 }
 
@@ -277,9 +301,15 @@ public final class AVAssetReaderSourceReader: SourceFrameReader {
 /// out in Resolume Arena's colour convention (DXVKit's), not the older
 /// GlanceCore v0.7.0 conversion.
 ///
-/// Alpha semantics: DXVKit returns the decoded alpha as stored (no
-/// premultiply), DXT1 / YCG6 with α = 255. The `PixelFrame` is tagged
-/// `.last` (straight), as before.
+/// Alpha semantics: DXVKit returns the decoded colour and alpha as stored,
+/// DXT1 / YCG6 with α = 255. The file does not say whether that colour is
+/// straight or premultiplied (DXVKit spec 8.5), so the caller says
+/// (`alphaType`, v1.6.0, Arena's "Alpha Type", default Premultiplied):
+/// `.premultiplied` un-premultiplies the colour here, on read, before any
+/// encoder sees it; `.straight` passes it through. Either way the
+/// `PixelFrame` is tagged `.last` (straight) — every output then gets
+/// straight colour (up to v1.5.0 a premultiplied DXV source reached
+/// straight outputs still premultiplied: double-darkened).
 public final class DxvSourceReader: SourceFrameReader {
     public let sourceWidth: Int
     public let sourceHeight: Int
@@ -288,11 +318,14 @@ public final class DxvSourceReader: SourceFrameReader {
 
     private let movie: DXVMovie
     private let frame = DXVFrame()
+    /// True when the colour is un-premultiplied on read (an alpha variant
+    /// read as `.premultiplied`).
+    public let unpremultipliesOnRead: Bool
     /// Presentation times from GlanceCore's demuxer (seconds, per sample).
     private let presentationTimes: [Double]
     private var frameIdx: Int = 0
 
-    public init(url: URL) throws {
+    public init(url: URL, alphaType: SourceAlphaType = .default) throws {
         let index: DXVMovieIndex
         do { index = try DXVDemuxer.demux(url: url) } catch {
             throw SourceReaderError.dxvDemuxFailed(underlying: error)
@@ -312,25 +345,44 @@ public final class DxvSourceReader: SourceFrameReader {
         self.sourceFPS = index.frameRate
         self.totalFrameCount = index.frames.count
         self.presentationTimes = index.frames.map(\.presentationTime)
+        self.unpremultipliesOnRead = alphaType == .premultiplied && movie.hasAlpha
     }
 
     public func readNextFrame() throws -> PixelFrame? {
         guard frameIdx < totalFrameCount else { return nil }
         let myIdx = frameIdx
         frameIdx += 1
-        let rgba: Data
+        var rgba: Data
         do {
             try movie.decodeBlocks(at: myIdx, into: frame)
             rgba = try frame.rgba()
         } catch {
             throw SourceReaderError.dxvDecodeFailed(idx: myIdx, underlying: error)
         }
+        if unpremultipliesOnRead { Self.unpremultiply(&rgba) }
         guard let pb = try Self.makeBGRAPixelBuffer(
                 rgba: rgba, width: sourceWidth, height: sourceHeight) else {
             throw SourceReaderError.pixelBufferCreateFailed(kCVReturnAllocationFailed)
         }
         let pts = CMTime(seconds: presentationTimes[myIdx], preferredTimescale: 600)
         return PixelFrame(pixelBuffer: pb, presentationTime: pts, alphaInfo: .last)
+    }
+
+    /// Premultiplied RGBA -> straight, in place (AlphaNormalization's
+    /// integer rule: round(c x 255 / α), α = 0 -> 0).
+    static func unpremultiply(_ rgba: inout Data) {
+        rgba.withUnsafeMutableBytes { raw in
+            let p = raw.bindMemory(to: UInt8.self)
+            var i = 0
+            while i + 3 < p.count {
+                let a = p[i + 3]
+                if a != 255 {
+                    let (r, g, b, _) = AlphaNormalization.unpremultiply.apply(r: p[i], g: p[i + 1], b: p[i + 2], a: a)
+                    p[i] = r; p[i + 1] = g; p[i + 2] = b
+                }
+                i += 4
+            }
+        }
     }
 
     /// Create a kCVPixelFormatType_32BGRA pixel buffer and fill it from

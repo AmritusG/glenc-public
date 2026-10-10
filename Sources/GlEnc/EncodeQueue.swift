@@ -382,10 +382,16 @@ final class EncodeQueue: ObservableObject {
             Task { [weak self] in
                 let alpha = await EncodeJob.probeSourceAlpha(probeURL)
                 let hasAudio = await SourceAudioReader.hasAudio(probeURL)
+                // v1.6.0 — Alpha Type: DXV alpha is the user's choice (+ the
+                // spec 8.5 hint); HAP / ProRes / HEVC alpha is stated.
+                let alphaReport = await SourceAlpha.probe(probeURL)
                 guard let self else { return }
                 if let i = self.jobs.firstIndex(where: { $0.id == jobID }) {
-                    self.jobs[i].sourceHasAlpha = alpha
+                    // DXV sources: EncodeJob.probeSourceAlpha can't read them
+                    // (AVFoundation sees only the FourCC); the report can.
+                    self.jobs[i].sourceHasAlpha = alpha ?? (alphaReport.kind == .choosable ? true : nil)
                     self.jobs[i].sourceHasAudio = hasAudio
+                    self.jobs[i].sourceAlphaReport = alphaReport
                 }
                 // Fix-Brief B — capture authoritative source dims + fps +
                 // frame count via the validated encode reader, and surface
@@ -612,7 +618,8 @@ final class EncodeQueue: ObservableObject {
                                 audioRate: s.defaultAudioRate,
                                 outputSize: defaultOutputSize,
                                 resizeQuality: defaultResizeQuality,
-                                aspectMode: defaultAspectMode)
+                                aspectMode: defaultAspectMode,
+                                sourceAlphaType: s.defaultSourceAlphaType)
             r.clampAudioRateToContainer()
             return r
         }
@@ -629,6 +636,7 @@ final class EncodeQueue: ObservableObject {
             if defaultOutputSize != newValue.outputSize { defaultOutputSize = newValue.outputSize }
             if defaultResizeQuality != newValue.resizeQuality { defaultResizeQuality = newValue.resizeQuality }
             if defaultAspectMode != newValue.aspectMode { defaultAspectMode = newValue.aspectMode }
+            if s.defaultSourceAlphaType != newValue.sourceAlphaType { s.defaultSourceAlphaType = newValue.sourceAlphaType }
             objectWillChange.send()
         }
     }
@@ -977,7 +985,9 @@ final class EncodeQueue: ObservableObject {
                 // Slice 4 — per-job HAP chunk count. 1 (default) keeps the
                 // single-section path byte-identical; the library ignores it
                 // for non-HAP formats.
-                hapChunks: snapshot.hapChunks)
+                hapChunks: snapshot.hapChunks,
+                // v1.6.0 — the source's Alpha Type (DXV sources only).
+                sourceAlphaType: snapshot.sourceAlphaType)
             let pipeline = try CoreEncoder.makePipeline(
                 request,
                 audio: audioData,
