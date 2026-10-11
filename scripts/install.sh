@@ -159,7 +159,11 @@ echo "==> Registering with LaunchServices"
 echo "==> Refreshing Dock (so Cmd-Tab picks up the new icon)"
 killall Dock 2>&1 || true
 
-# ---- Step 10: explicit success line.
+# ---- Step 10: leave /Applications/GlEnc.app as the only LaunchServices record
+# (build.sh / sign.sh registered $APP). A leftover record is a warning, not a failed install.
+"$ROOT/scripts/ls-cleanup.sh" || echo "WARNING: ls-cleanup.sh found records it left alone (see above)."
+
+# ---- Step 11: explicit success line.
 #
 # A partial install must not look the same as success. Anything that
 # bails above exits nonzero; reaching this point means every

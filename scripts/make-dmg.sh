@@ -68,3 +68,8 @@ echo "    APPLE_ID=... APPLE_TEAM_ID=... APPLE_PASSWORD=... \\"
 echo "    xcrun notarytool submit '$DMG' --apple-id \"\$APPLE_ID\" \\"
 echo "        --team-id \"\$APPLE_TEAM_ID\" --password \"\$APPLE_PASSWORD\" --wait"
 echo "    xcrun stapler staple '$DMG'"
+
+# Last step that touches the build product: leave /Applications/GlEnc.app as the only
+# LaunchServices record (build / sign / notarize / spctl registered ./GlEnc.app).
+echo
+"$ROOT/scripts/ls-cleanup.sh" || echo "WARNING: ls-cleanup.sh found records it left alone (see above)."
