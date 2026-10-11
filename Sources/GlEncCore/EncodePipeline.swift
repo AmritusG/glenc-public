@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import GlanceCore
 import Foundation
 import AVFoundation
 import CoreVideo
@@ -83,7 +84,7 @@ public final class EncodePipeline {
     public let sourceAlphaInfo: CGImageAlphaInfo
     /// v1.6.0: the per-source "Alpha Type" for DXV sources (their files do
     /// not say): `.premultiplied` un-premultiplies on read (`DxvSourceReader`).
-    public let sourceAlphaType: SourceAlphaType
+    public let sourceAlphaType: AlphaType
     /// Phase 8C-a — optional source-frame range. nil = encode the full
     /// source. When set, only frames in `[lowerBound, upperBound)` are
     /// written. Frames before `lowerBound` are read-and-discarded (no
@@ -146,7 +147,7 @@ public final class EncodePipeline {
         makeWriter: @escaping WriterFactory,
         progress: ProgressCallback? = nil,
         sourceAlphaInfo: CGImageAlphaInfo = .last,
-        sourceAlphaType: SourceAlphaType = .default,
+        sourceAlphaType: AlphaType = .default,
         frameRange: Range<Int>? = nil,
         outputSize: OutputSize = .original,
         resizeQuality: ResizeQuality = .auto,
@@ -181,7 +182,7 @@ public final class EncodePipeline {
         makeSink: @escaping SinkFactory,
         progress: ProgressCallback? = nil,
         sourceAlphaInfo: CGImageAlphaInfo = .last,
-        sourceAlphaType: SourceAlphaType = .default,
+        sourceAlphaType: AlphaType = .default,
         frameRange: Range<Int>? = nil,
         outputSize: OutputSize = .original,
         resizeQuality: ResizeQuality = .auto,

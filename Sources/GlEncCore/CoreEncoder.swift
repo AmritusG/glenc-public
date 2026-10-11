@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import GlanceCore
 import Foundation
 import AVFoundation
 import CoreVideo
@@ -48,7 +49,7 @@ public struct EncodeRequest: Sendable {
     /// Premultiplied): `.premultiplied` un-premultiplies on read, before any
     /// encode; `.straight` passes through. Ignored for every other source
     /// (HAP / ProRes / HEVC alpha are read as their format states).
-    public var sourceAlphaType: SourceAlphaType
+    public var sourceAlphaType: AlphaType
 
     public init(
         sourceURL: URL,
@@ -63,7 +64,7 @@ public struct EncodeRequest: Sendable {
         frameRange: Range<Int>? = nil,
         writerVersion: String = "GlEnc",
         hapChunks: Int = 1,
-        sourceAlphaType: SourceAlphaType = .default
+        sourceAlphaType: AlphaType = .default
     ) {
         self.sourceURL = sourceURL
         self.outputURL = outputURL

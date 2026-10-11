@@ -63,10 +63,11 @@ public final class MetalDXVRenderer {
     /// forgets.
     public var contentsScale: CGFloat = 2.0
 
-    /// Mirrors `DXVRenderer.unpremultiplyAlpha` — for matching
-    /// straight-alpha sources rather than the premultiplied Resolume
-    /// default. False by default.
-    public var unpremultiplyAlpha: Bool = false
+    /// v0.18.0 — mirrors `DXVRenderer.alphaType`: what the current DXV
+    /// clip's colour is (Resolume Arena's per-clip "Alpha Type"; a DXV file
+    /// does not say). `.premultiplied` (default) draws DXT5 / YG10 texels as
+    /// they are; `.straight` premultiplies them in the shader first.
+    public var alphaType: AlphaType = .premultiplied
 
     public var backgroundMode: BackgroundMode = .black
 
@@ -402,7 +403,7 @@ public final class MetalDXVRenderer {
             texSize: SIMD2<Float>(Float(dxtTexSize.w), Float(dxtTexSize.h)),
             displaySize: SIMD2<Int32>(Int32(lastUploadWidth), Int32(lastUploadHeight)),
             format: lastUploadVariant == .dxt1 ? 1 : 3,
-            unpremultiply: unpremultiplyAlpha ? 1 : 0)
+            premultiply: alphaType == .straight && lastUploadVariant == .dxt5 ? 1 : 0)
         encoder.setFragmentBytes(&dxtFragUniforms, length: MemoryLayout<DXTFragUniforms>.stride, index: 0)
 
         encoder.setFragmentTexture(texture, index: 0)
@@ -435,7 +436,7 @@ public final class MetalDXVRenderer {
             texSize: SIMD2<Float>(Float(hqTexSize.w), Float(hqTexSize.h)),
             displaySize: SIMD2<Int32>(Int32(lastUploadWidth), Int32(lastUploadHeight)),
             hasAlpha: variant == .yg10 ? 1 : 0,
-            unpremultiply: unpremultiplyAlpha ? 1 : 0
+            premultiply: alphaType == .straight && variant == .yg10 ? 1 : 0
         )
         encoder.setFragmentBytes(&hqFragUniforms, length: MemoryLayout<HQFragUniforms>.stride, index: 0)
 
@@ -481,14 +482,14 @@ public final class MetalDXVRenderer {
         var texSize: SIMD2<Float>
         var displaySize: SIMD2<Int32>
         var format: Int32         // 1 = BC1 (DXT1), 3 = BC3 (DXT5)
-        var unpremultiply: Int32  // 0/1 — kept Int32 to match MSL `int`
+        var premultiply: Int32    // 0/1 — kept Int32 to match MSL `int`
     }
     private struct HQFragUniforms {
         var uvClamp: SIMD4<Float>
         var texSize: SIMD2<Float>
         var displaySize: SIMD2<Int32>
         var hasAlpha: Int32       // 0 for YCG6 (shader writes alpha=1), 1 for YG10
-        var unpremultiply: Int32  // 0/1
+        var premultiply: Int32    // 0/1
     }
     private struct BGUniforms {
         var light: SIMD3<Float>
@@ -527,7 +528,7 @@ public final class MetalDXVRenderer {
         float2 texSize;
         int2 displaySize;
         int format;
-        int unpremultiply;
+        int premultiply;
     };
 
     struct HQFragUniforms {
@@ -535,7 +536,7 @@ public final class MetalDXVRenderer {
         float2 texSize;
         int2 displaySize;
         int hasAlpha;
-        int unpremultiply;
+        int premultiply;
     };
 
     struct BGUniforms {
@@ -636,8 +637,8 @@ public final class MetalDXVRenderer {
         int2 a = clamp(int2(floor(p)), lo, hi), b = clamp(int2(floor(p)) + 1, lo, hi);
         float4 c = mix(mix(dxtTexel(tex, a, u.format), dxtTexel(tex, int2(b.x, a.y), u.format), f.x),
                        mix(dxtTexel(tex, int2(a.x, b.y), u.format), dxtTexel(tex, b, u.format), f.x), f.y) / 255.0;
-        if (u.unpremultiply == 1 && c.a > 0.0) {
-            c.rgb = c.rgb / c.a;
+        if (u.premultiply == 1) {   // DXT5 with Alpha Type Straight
+            c.rgb = c.rgb * c.a;
         }
         return c;
     }
@@ -684,8 +685,8 @@ public final class MetalDXVRenderer {
         float alpha = 1.0;
         if (u.hasAlpha == 1) {
             alpha = float(hqRound(int(floor(2.0 * l.y + 0.5)))) / 255.0;
-            if (u.unpremultiply == 1 && alpha > 0.0) {
-                rgb = rgb / alpha;
+            if (u.premultiply == 1) {   // YG10 with Alpha Type Straight
+                rgb = rgb * alpha;
             }
         }
         return float4(rgb, alpha);

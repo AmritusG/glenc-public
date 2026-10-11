@@ -29,7 +29,9 @@ public enum DXVThumbnail {
     /// Decode frame 0 of the DXV file at `url` and return it as a CGImage.
     /// Throws `ThumbnailError.notADXVFile` for other codecs (callers use this
     /// to let the system handle the file).
-    public static func cgImageOfFirstFrame(at url: URL) throws -> CGImage {
+    /// `alphaType` (v0.18.0): what the clip's colour is (a DXV file doesn't
+    /// say); the CGImage is labelled to match. Default Premultiplied, Arena's.
+    public static func cgImageOfFirstFrame(at url: URL, alphaType: AlphaType = .default) throws -> CGImage {
         // Quick FourCC pre-check so a 10 GB H.264 file fails fast. Sample-entry
         // FourCCs Resolume Arena accepts: DXD3 / DXD4 (DXV3), DXDI (legacy);
         // "DXV3" kept for old callers' files.
@@ -42,7 +44,8 @@ public enum DXVThumbnail {
         guard movie.frameCount > 0 else { throw ThumbnailError.noFrames }
         do {
             let rgba = try movie.decodeRGBA(at: 0)
-            return try CPURender.cgImageFromRGBA(rgba: [UInt8](rgba), width: movie.width, height: movie.height)
+            return try CPURender.cgImageFromRGBA(rgba: [UInt8](rgba), width: movie.width, height: movie.height,
+                                                 alphaType: alphaType)
         } catch {
             throw ThumbnailError.decodeFailed(underlying: error)
         }

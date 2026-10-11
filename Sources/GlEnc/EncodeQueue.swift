@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import GlanceCore
 import Foundation
 import SwiftUI
 import CoreGraphics
@@ -384,7 +385,7 @@ final class EncodeQueue: ObservableObject {
                 let hasAudio = await SourceAudioReader.hasAudio(probeURL)
                 // v1.6.0 — Alpha Type: DXV alpha is the user's choice (+ the
                 // spec 8.5 hint); HAP / ProRes / HEVC alpha is stated.
-                let alphaReport = await SourceAlpha.probe(probeURL)
+                let alphaReport = await AlphaTypeProbe.probe(probeURL)
                 guard let self else { return }
                 if let i = self.jobs.firstIndex(where: { $0.id == jobID }) {
                     // DXV sources: EncodeJob.probeSourceAlpha can't read them

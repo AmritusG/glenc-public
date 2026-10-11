@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import GlanceCore
 import Foundation
 import CoreGraphics
 import AVFoundation
@@ -60,8 +61,8 @@ struct EncodeJob: Identifiable, Equatable {
     /// user's choice, default Premultiplied) and what the probe found:
     /// choosable (DXV), stated by the format (HAP / ProRes / HEVC alpha) or
     /// no alpha, plus the spec 8.5 hint. nil until the add-time probe runs.
-    var sourceAlphaType: SourceAlphaType = .default
-    var sourceAlphaReport: SourceAlphaReport? = nil
+    var sourceAlphaType: AlphaType = .default
+    var sourceAlphaReport: AlphaTypeReport? = nil
     var status: Status
     var progress: Double       // 0...1
     var outputURL: URL?

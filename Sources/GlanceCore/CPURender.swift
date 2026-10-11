@@ -29,11 +29,13 @@ public enum CPURender {
 
     /// Decode DXT1 or DXT5 block bytes laid out with 16-pixel-aligned block
     /// columns (the DXV layout, `paddedW * height / 2` or `paddedW * height`
-    /// bytes) into a display-size CGImage.
+    /// bytes) into a display-size CGImage. `alphaType` (v0.18.0): what the
+    /// DXT5 colour is — the CGImage is labelled to match (see `cgImageFromRGBA`).
     public static func cgImageFromDXT(
         dxtBytes: Data,
         variant: DXVVariant,
-        width: Int, height: Int
+        width: Int, height: Int,
+        alphaType: AlphaType = .default
     ) throws -> CGImage {
         precondition(variant == .dxt1 || variant == .dxt5,
                      "cgImageFromDXT only handles DXT1/DXT5; use cgImageFromHQ for HQ variants")
@@ -44,7 +46,7 @@ public enum CPURender {
                 "DXT bytes \(dxtBytes.count) < expected \(expected) for \(width)x\(height) (padded to \(paddedW))")
         }
         let rgba = try DXVKitBridge.rgbaFromDXT(dxtBytes, alpha: variant == .dxt5, width: width, height: height)
-        return try cgImageFromRGBA(rgba: rgba, width: width, height: height)
+        return try cgImageFromRGBA(rgba: rgba, width: width, height: height, alphaType: alphaType)
     }
 
     /// DXT1 block bytes → RGBA8 (`width * height * 4`, alpha 255).
@@ -107,10 +109,12 @@ public enum CPURender {
     /// the exact CPU path for frame N (`DXVThumbnail` covers frame 0). The
     /// payload-level plane API (`DXVHQDecoder` + `cgImageFromHQ`) can't be
     /// exact for HQ: its 8-bit planes truncate the BC4 palette before the
-    /// YCoCg math, which lands within 2 of DXVKit.
-    public static func cgImageFromPacket(_ packet: Data, index: DXVMovieIndex) throws -> CGImage {
+    /// YCoCg math, which lands within 2 of DXVKit. `alphaType` (v0.18.0):
+    /// what the clip's colour is; the CGImage is labelled to match.
+    public static func cgImageFromPacket(_ packet: Data, index: DXVMovieIndex,
+                                         alphaType: AlphaType = .default) throws -> CGImage {
         let rgba = try DXVKitBridge.rgba(packet: packet, index: index)
-        return try cgImageFromRGBA(rgba: rgba, width: index.width, height: index.height)
+        return try cgImageFromRGBA(rgba: rgba, width: index.width, height: index.height, alphaType: alphaType)
     }
 
     // MARK: - HQ planes
@@ -127,7 +131,8 @@ public enum CPURender {
         y: [UInt8], co: [UInt8], cg: [UInt8], a: [UInt8]?,
         width: Int, height: Int,
         chromaWidth: Int, chromaHeight: Int,
-        displayWidth: Int? = nil
+        displayWidth: Int? = nil,
+        alphaType: AlphaType = .default
     ) throws -> CGImage {
         guard y.count == width * height else {
             throw RenderError.dimensionMismatch("Y plane \(y.count) != \(width)*\(height)")
@@ -160,7 +165,7 @@ public enum CPURender {
                 rgba[o + 3] = a.map { $0[row * width + col] } ?? 255
             }
         }
-        return try cgImageFromRGBA(rgba: rgba, width: outW, height: height)
+        return try cgImageFromRGBA(rgba: rgba, width: outW, height: height, alphaType: alphaType)
     }
 
     /// Arena's YCoCg → RGB on 8-bit samples, in half units (no floating point):
@@ -181,18 +186,23 @@ public enum CPURender {
 
     // MARK: - Helpers
 
-    /// RGBA8 (not premultiplied, alpha last) → CGImage.
-    static func cgImageFromRGBA(rgba: [UInt8], width: Int, height: Int) throws -> CGImage {
+    /// DXV RGBA8 as decoded (alpha last) → CGImage, labelled with what the
+    /// colour is (v0.18.0): `.premultiplied` -> `.premultipliedLast`,
+    /// `.straight` -> `.last`. A DXV file does not say (DXVKit spec 8.5); the
+    /// default is Arena's, Premultiplied. Up to v0.17.3 every image was
+    /// labelled `.last`, so a premultiplied clip composited darkened (the
+    /// v0.4.17 fix assumed straight bytes). Opaque frames (alpha 255) look the
+    /// same either way.
+    static func cgImageFromRGBA(rgba: [UInt8], width: Int, height: Int,
+                                alphaType: AlphaType = .default) throws -> CGImage {
         guard let provider = CGDataProvider(data: Data(rgba) as CFData) else { throw RenderError.cgImageFailed }
-        // Bytes are NOT premultiplied: labelling them `.last` is what keeps
-        // source-over compositing onto transparent regions correct (Crate's
-        // checkerboard bake-in, v0.4.17).
         guard let img = CGImage(
             width: width, height: height,
             bitsPerComponent: 8, bitsPerPixel: 32,
             bytesPerRow: width * 4,
             space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            bitmapInfo: CGBitmapInfo(rawValue: (alphaType == .premultiplied
+                ? CGImageAlphaInfo.premultipliedLast : CGImageAlphaInfo.last).rawValue),
             provider: provider,
             decode: nil,
             shouldInterpolate: false,
