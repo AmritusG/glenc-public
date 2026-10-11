@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import GlanceCore
 import Foundation
 import SwiftUI
 import GlEncCore
@@ -51,7 +52,7 @@ final class AppSettings: ObservableObject {
 
     /// v1.6.0 — "Alpha Type" for new DXV sources with alpha (Arena's name
     /// and default: Premultiplied). Persisted as its raw value.
-    @Published var defaultSourceAlphaType: SourceAlphaType {
+    @Published var defaultSourceAlphaType: AlphaType {
         didSet { userDefaults.set(defaultSourceAlphaType.rawValue, forKey: Keys.defaultSourceAlphaType) }
     }
 
@@ -328,7 +329,7 @@ final class AppSettings: ObservableObject {
         self.defaultHapChunks =
             min(64, max(1, (d.object(forKey: Keys.defaultHapChunks) as? Int) ?? 1))
         self.defaultSourceAlphaType =
-            SourceAlphaType(rawValue: d.string(forKey: Keys.defaultSourceAlphaType) ?? "") ?? .default
+            AlphaType(rawValue: d.string(forKey: Keys.defaultSourceAlphaType) ?? "") ?? .default
         self.defaultOutputCodec = {
             if let data = d.data(forKey: Keys.defaultOutputCodec),
                let decoded = try? JSONDecoder().decode(OutputCodec.self, from: data) {

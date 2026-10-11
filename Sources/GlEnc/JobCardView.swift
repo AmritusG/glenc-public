@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import GlanceCore
 import SwiftUI
 import AppKit
 import GlEncCore
@@ -1077,7 +1078,7 @@ struct JobCardView: View {
     /// v1.6.0 — the source's "Alpha Type" (Arena's name; default
     /// Premultiplied) and the spec 8.5 hint. The hint never changes it.
     @ViewBuilder
-    private func sourceAlphaTypeControl(_ report: SourceAlphaReport) -> some View {
+    private func sourceAlphaTypeControl(_ report: AlphaTypeReport) -> some View {
         switch report.kind {
         case .none:
             EmptyView()

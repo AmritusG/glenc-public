@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import GlanceCore
 import Foundation
 import GlEncCore
 
@@ -32,7 +33,7 @@ struct JobSettings: Equatable, Codable {
     /// sources with alpha (their files do not say) — the reader
     /// un-premultiplies on read. Other sources are read as their format
     /// states and show the control disabled.
-    var sourceAlphaType: SourceAlphaType = .default
+    var sourceAlphaType: AlphaType = .default
 
     // MARK: - Applicability predicates (drive both UI gating and no-ops)
 
@@ -165,7 +166,7 @@ struct JobSettings: Equatable, Codable {
 
     // MARK: - Source alpha type
 
-    mutating func setSourceAlphaType(_ t: SourceAlphaType) { sourceAlphaType = t }
+    mutating func setSourceAlphaType(_ t: AlphaType) { sourceAlphaType = t }
 
     // MARK: - Resize
 

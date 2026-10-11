@@ -98,11 +98,16 @@ public final class DXVRenderer {
     public private(set) var lastUploadHeight: Int = 0    // display
     public private(set) var hasUpload: Bool = false
 
-    /// Whether to un-premultiply alpha at render time. DXV uses
-    /// DXT4-style premultiplied alpha; for compositing matching
-    /// Resolume we want it premultiplied. For showing alongside
-    /// straight-alpha sources (Photoshop), un-premultiply.
-    public var unpremultiplyAlpha: Bool = false
+    /// v0.18.0 — what the current DXV clip's colour is (Resolume Arena's
+    /// per-clip "Alpha Type"; a DXV file does not say, DXVKit spec 8.5).
+    /// Applies to DXV alpha uploads (DXT5 / legacy DXT5 through `uploadFrame`
+    /// with `straightAlpha: false`, YG10 through `uploadHQFrame`):
+    /// `.premultiplied` (default, Arena's) draws the texels as they are;
+    /// `.straight` premultiplies them in the shader (rgb *= a) first, so
+    /// both composite correctly over black and over the checkerboard. HAP is
+    /// not affected (Hap5 / HapM are straight by their own path). Replaces
+    /// the unused `unpremultiplyAlpha`.
+    public var alphaType: AlphaType = .premultiplied
 
     /// Background mode painted behind the video frame. See `BackgroundMode`.
     /// Default `.black` — preserves byte-identical output for every variant.
@@ -138,7 +143,6 @@ public final class DXVRenderer {
     private var dxtUFormatLoc: GLint = -1
     private var dxtUTexSizeLoc: GLint = -1
     private var dxtUDisplaySizeLoc: GLint = -1
-    private var dxtUUnpremultiplyLoc: GLint = -1
     private var dxtUPremultiplyLoc: GLint = -1
     private var dxtCropLoc = CropLocations()
 
@@ -195,8 +199,8 @@ public final class DXVRenderer {
     /// Set true when the last DXT upload carried STRAIGHT (non-premultiplied)
     /// alpha — i.e. a HAP Hap5 (DXT5 RGBA) frame. Driven by the `straightAlpha`
     /// argument to `uploadFrame` (caller-driven), NOT inferred from the
-    /// variant: DXV dxt5 is also `.dxt5` but is premultiplied by authoring
-    /// convention and MUST stay on the passthrough path. When true,
+    /// variant: DXV dxt5 is also `.dxt5`, and its convention is the clip's
+    /// `alphaType` (v0.18.0), not HAP's. When true,
     /// `renderDXT()` sets the shader's `uPremultiply` so the straight texel is
     /// premultiplied (rgb*=a) post-sample, making it composite identically to
     /// premultiplied DXV dxt5/YG10 under both the `.black` (blend-off →
@@ -218,7 +222,7 @@ public final class DXVRenderer {
     private var hqULocLuma: GLint = -1
     private var hqULocChroma: GLint = -1
     private var hqULocHasAlpha: GLint = -1
-    private var hqULocUnpremultiply: GLint = -1
+    private var hqULocPremultiply: GLint = -1
     private var hqULocTexSize: GLint = -1
     private var hqULocDisplaySize: GLint = -1
     private var hqCropLoc = CropLocations()
@@ -296,7 +300,6 @@ public final class DXVRenderer {
         dxtUFormatLoc = glGetUniformLocation(dxtProgram, "uFormat")
         dxtUTexSizeLoc = glGetUniformLocation(dxtProgram, "uTexSize")
         dxtUDisplaySizeLoc = glGetUniformLocation(dxtProgram, "uDisplaySize")
-        dxtUUnpremultiplyLoc = glGetUniformLocation(dxtProgram, "uUnpremultiply")
         dxtUPremultiplyLoc = glGetUniformLocation(dxtProgram, "uPremultiply")
         dxtCropLoc = CropLocations(program: dxtProgram)
         dxtTexture = Self.makeBlockTexture()
@@ -327,7 +330,7 @@ public final class DXVRenderer {
         hqULocLuma          = glGetUniformLocation(hqProgram, "uLuma")
         hqULocChroma        = glGetUniformLocation(hqProgram, "uChroma")
         hqULocHasAlpha      = glGetUniformLocation(hqProgram, "uHasAlpha")
-        hqULocUnpremultiply = glGetUniformLocation(hqProgram, "uUnpremultiply")
+        hqULocPremultiply = glGetUniformLocation(hqProgram, "uPremultiply")
         hqCropLoc           = CropLocations(program: hqProgram)
         hqULocTexSize       = glGetUniformLocation(hqProgram, "uTexSize")
         hqULocDisplaySize   = glGetUniformLocation(hqProgram, "uDisplaySize")
@@ -383,8 +386,8 @@ public final class DXVRenderer {
     ///
     /// `straightAlpha` is caller-driven: pass `true` ONLY for HAP Hap5 (DXT5
     /// straight-alpha) frames so the shader premultiplies post-decode. DXV
-    /// dxt5 is premultiplied by authoring convention and MUST pass `false`
-    /// (the default). No-op for opaque DXT1 (alpha = 1).
+    /// dxt5 passes `false` (the default): its convention is `alphaType`.
+    /// No-op for opaque DXT1 (alpha = 1).
     @discardableResult
     public func uploadFrame(dxtBytes: Data, variant: Variant,
                             width: Int, height: Int,
@@ -511,7 +514,7 @@ public final class DXVRenderer {
 
     /// Upload a HapM frame: the HapY colour blocks (as `uploadHapQFrame`) and
     /// the BC4 alpha blocks, re-padded to the same 16-pixel stride at 8 bytes
-    /// per block. Drawn premultiplied (rgb * a, a), like DXT5 / YG10.
+    /// per block. Straight colour, premultiplied for output (rgb * a, a).
     @discardableResult
     public func uploadHapMFrame(colorDXT5: Data, alphaBC4: Data,
                                 width: Int, height: Int) -> Bool {
@@ -584,8 +587,8 @@ public final class DXVRenderer {
         }
 
         if lastUploadIsHapY {
-            // Hap Q is opaque (the blend is a no-op); HapM is drawn
-            // premultiplied, so it composites like DXT5 / YG10.
+            // Hap Q is opaque (the blend is a no-op); HapM colour is STRAIGHT
+            // (HAP alpha is straight) and the shader premultiplies it for output.
             renderHapY()
         } else if lastUploadIsRGBA {
             renderRGBA()
@@ -617,8 +620,9 @@ public final class DXVRenderer {
         glUniform1i(dxtUFormatLoc, lastUploadVariant == .dxt1 ? 1 : 3)
         glUniform2f(dxtUTexSizeLoc, Float(dxtTexSize.w), Float(dxtTexSize.h))
         glUniform2i(dxtUDisplaySizeLoc, GLint(lastUploadWidth), GLint(lastUploadHeight))
-        glUniform1i(dxtUUnpremultiplyLoc, unpremultiplyAlpha ? 1 : 0)
-        glUniform1i(dxtUPremultiplyLoc, lastUploadIsHap5Straight ? 1 : 0)
+        // Hap5 (straight by format) or a DXV DXT5 clip set to Straight.
+        let premultiply = lastUploadIsHap5Straight || (alphaType == .straight && lastUploadVariant == .dxt5)
+        glUniform1i(dxtUPremultiplyLoc, premultiply ? 1 : 0)
         dxtCropLoc.set(dxtCrop)
         glDrawArrays(GLenum(GL_TRIANGLE_STRIP), 0, 4)
     }
@@ -663,7 +667,7 @@ public final class DXVRenderer {
         glUniform1i(hqULocChroma, 1)
 
         glUniform1i(hqULocHasAlpha, variant == .yg10 ? 1 : 0)
-        glUniform1i(hqULocUnpremultiply, unpremultiplyAlpha ? 1 : 0)
+        glUniform1i(hqULocPremultiply, variant == .yg10 && alphaType == .straight ? 1 : 0)
         glUniform2f(hqULocTexSize, Float(hqTexSize.w), Float(hqTexSize.h))
         glUniform2i(hqULocDisplaySize, GLint(lastUploadWidth), GLint(lastUploadHeight))
         hqCropLoc.set(hqCrop)
@@ -801,8 +805,8 @@ public final class DXVRenderer {
     /// DXT fragment shader (BC1 / BC3, plus legacy and HAP Hap1 / Hap5):
     /// decodes the four display texels around the sample point from the
     /// raw blocks and blends them bilinearly (GL_LINEAR's formula), so at
-    /// 1:1 each fragment is exactly its own decoded texel. Optionally
-    /// un-premultiplies, or premultiplies straight-alpha Hap5.
+    /// 1:1 each fragment is exactly its own decoded texel. Premultiplies
+    /// straight colour (Hap5, or a DXV DXT5 clip whose Alpha Type is Straight).
     private let dxtFragmentShaderSrc = """
     #version 330 core
     in vec2 vTex;
@@ -811,7 +815,6 @@ public final class DXVRenderer {
     uniform int uFormat;          // 1 = BC1 (DXT1), 3 = BC3 (DXT5)
     uniform vec2 uTexSize;        // padded texture size, pixels
     uniform ivec2 uDisplaySize;
-    uniform int uUnpremultiply;
     uniform int uPremultiply;
     \(DXVRenderer.cropFragmentSrc)
     \(DXVRenderer.blockDecodeSrc)
@@ -828,12 +831,8 @@ public final class DXVRenderer {
         ivec2 b = clamp(ivec2(floor(p)) + 1, ivec2(0), uDisplaySize - 1);
         vec4 c = mix(mix(texel(a), texel(ivec2(b.x, a.y)), f.x),
                      mix(texel(ivec2(a.x, b.y)), texel(b), f.x), f.y) / 255.0;
-        if (uUnpremultiply == 1 && c.a > 0.0) {
-            c.rgb /= c.a;
-        }
-        // Straight-alpha (HAP Hap5) → premultiply so it composites identically
-        // to premultiplied DXV dxt5/YG10. Gated by uPremultiply (caller-driven
-        // via uploadFrame's straightAlpha); off for every DXV upload.
+        // Straight colour (HAP Hap5, or DXV DXT5 with Alpha Type Straight) →
+        // premultiply, so it composites like premultiplied DXV.
         if (uPremultiply == 1) {
             c.rgb *= c.a;
         }
@@ -870,7 +869,8 @@ public final class DXVRenderer {
     ///   fold: R < 0 -> B += R, R = 0; B < 0 -> R += B, B = 0;
     ///         R > max -> B += R - max, R = max; B > max -> R += B - max, B = max
     ///   round half up to 8 bits and clamp (`hq_round`).
-    /// Alpha (YG10) is hq_round(2 A) and passes through (straight).
+    /// Alpha (YG10) is hq_round(2 A); with Alpha Type Straight the colour is
+    /// premultiplied by it (v0.18.0), else drawn as stored.
     private let hqFragmentShaderSrc = """
     #version 330 core
     in vec2 vTex;
@@ -878,7 +878,7 @@ public final class DXVRenderer {
     uniform usampler2D uLuma;     // BC4 Y (.xy) or BC5 Y (.xy) + A (.zw)
     uniform usampler2D uChroma;   // BC5 Co (.xy) + Cg (.zw)
     uniform int uHasAlpha;
-    uniform int uUnpremultiply;
+    uniform int uPremultiply;     // YG10 with Alpha Type Straight
     uniform vec2 uTexSize;        // coded size, pixels
     uniform ivec2 uDisplaySize;
     \(DXVRenderer.cropFragmentSrc)
@@ -915,8 +915,8 @@ public final class DXVRenderer {
         float alpha = 1.0;
         if (uHasAlpha == 1) {
             alpha = float(hqRound(int(floor(2.0 * l.y + 0.5)))) / 255.0;
-            if (uUnpremultiply == 1 && alpha > 0.0) {
-                rgb /= alpha;
+            if (uPremultiply == 1) {
+                rgb *= alpha;
             }
         }
         fragColor = vec4(rgb, alpha);
@@ -932,7 +932,7 @@ public final class DXVRenderer {
     ///   R' = Y + 8 (R - G) / D,  G' = Y + 4 (2G - 255) / D,
     ///   B' = Y - 8 (R + G - 255) / D, each rounded half up and clamped.
     /// The four display texels around the sample point blend bilinearly
-    /// (exact at 1:1, like the DXT program); HapM is drawn premultiplied.
+    /// (exact at 1:1, like the DXT program); HapM colour is straight; the shader premultiplies it for output.
     private let hapYFragmentShaderSrc = """
     #version 330 core
     in vec2 vTex;

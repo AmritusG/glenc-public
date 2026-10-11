@@ -18,6 +18,7 @@
 // AVAssetWriter sinks block on their own DispatchSemaphore inside
 // `finish()`. Either way the call is complete when `run()` returns.
 
+import GlanceCore
 import Foundation
 import CoreGraphics
 import ArgumentParser
@@ -85,7 +86,7 @@ struct GlencCLI: AsyncParsableCommand {
 
     @Option(name: .long,
             help: "What a DXV source's colour is (Resolume Arena's \"Alpha Type\"): premultiplied (default) or straight. A DXV file doesn't say; premultiplied colour is un-premultiplied on read. Ignored for other sources (HAP / ProRes / HEVC alpha are read as their format states).")
-    var alphaType: String = SourceAlphaType.default.rawValue
+    var alphaType: String = AlphaType.default.rawValue
 
     @Option(name: .long, help: "Encoding-software string stamped into udta/©swr.")
     var writerVersion: String = "glenc-cli 1.0.0"
@@ -116,7 +117,7 @@ struct GlencCLI: AsyncParsableCommand {
         guard let am = AspectMode(rawValue: aspect) else {
             throw ValidationError("invalid --aspect: \(aspect) (letterbox|distortToFill)")
         }
-        guard let sourceAlphaType = SourceAlphaType(rawValue: alphaType.lowercased()) else {
+        guard let sourceAlphaType = AlphaType(rawValue: alphaType.lowercased()) else {
             throw ValidationError("invalid --alpha-type: \(alphaType) (premultiplied|straight)")
         }
 

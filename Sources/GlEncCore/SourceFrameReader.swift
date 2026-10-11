@@ -131,14 +131,22 @@ internal func validateSourceGeometry(
     }
 }
 
+/// Compressor FourCCs that route to `DxvSourceReader`: the stsd texture
+/// tags of Alley-style outputs and the DXV version tags. v1.6.1: DXD4 joins
+/// (Resolume Arena 7.28's rules; DXVKit decodes it, Glance and MaCrate accept
+/// it); before, a DXD4 source fell through to AVFoundation and failed with
+/// "Cannot Decode". The literal sample-entry tag "DXV3" stays out: DXVKit
+/// refuses it ("Not a DXV file"), and GlanceCore's probe reports it `.none`.
+let dxvSourceFourCCs: Set<String> = ["DXT1", "DXT5", "YCG6", "YG10", "DXDI", "DXD3", "DXD4"]
+
 /// Inspect the source file and return the appropriate reader. Routes
 /// DXV3 sources to `DxvSourceReader`; everything else to `AVAssetReaderSourceReader`.
 /// `alphaType` (v1.6.0, the per-source "Alpha Type" switch) applies to DXV
-/// sources only: their files do not say (`SourceAlpha`).
+/// sources only: their files do not say (`GlanceCore.AlphaTypeProbe`, v1.6.1).
 public func makeSourceReader(
     for url: URL,
     sourceAlphaInfo: CGImageAlphaInfo,
-    alphaType: SourceAlphaType = .default
+    alphaType: AlphaType = .default
 ) async throws -> SourceFrameReader {
     if let cc = DXVDetector.compressorFourCC(at: url), dxvSourceFourCCs.contains(cc) {
         return try DxvSourceReader(url: url, alphaType: alphaType)
@@ -325,7 +333,7 @@ public final class DxvSourceReader: SourceFrameReader {
     private let presentationTimes: [Double]
     private var frameIdx: Int = 0
 
-    public init(url: URL, alphaType: SourceAlphaType = .default) throws {
+    public init(url: URL, alphaType: AlphaType = .default) throws {
         let index: DXVMovieIndex
         do { index = try DXVDemuxer.demux(url: url) } catch {
             throw SourceReaderError.dxvDemuxFailed(underlying: error)

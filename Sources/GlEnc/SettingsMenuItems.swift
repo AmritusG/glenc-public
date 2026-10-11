@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import GlanceCore
 import SwiftUI
 import GlEncCore
 
@@ -35,7 +36,7 @@ struct AlphaMenuItems: View {
 struct SourceAlphaTypeMenuItems: View {
     let apply: (EncodeQueue.SettingsEdit) -> Void
     var body: some View {
-        ForEach(SourceAlphaType.allCases, id: \.self) { t in
+        ForEach(AlphaType.allCases, id: \.self) { t in
             Button(t.label) { apply { s, _ in s.setSourceAlphaType(t) } }
         }
     }
