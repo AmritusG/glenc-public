@@ -10,9 +10,9 @@
 			<key>CFBundleTypeName</key>
 			<string>Movie</string>
 			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
+			<string>Viewer</string>
 			<key>LSHandlerRank</key>
-			<string>Alternate</string>
+			<string>None</string>
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>public.movie</string>
@@ -34,9 +34,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.6.1</string>
+	<string>1.6.2</string>
 	<key>CFBundleVersion</key>
-	<string>1.6.1</string>
+	<string>1.6.2</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.video</string>
 	<key>LSMinimumSystemVersion</key>
