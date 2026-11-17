@@ -1,0 +1,71 @@
+# cargo-deny policy (the model is DXVKit Plus's deny.toml): permissive dependencies only.
+#   cargo deny check
+# Run locally before every commit that ends a wave and by CI on every push (.github/workflows/ci.yml).
+# Copied from glance-core v0.3.0 (its policy is the programme's); only [sources] differs.
+
+[graph]
+all-features = true
+# The systems Glance ships on (glance-core docs/00-ROADMAP.md §7).
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
+
+[licenses]
+version = 2
+# The programme's allowlist (CLAUDE.md rule 2): MIT, BSD, Apache-2.0, Zlib, ISC first. Each further
+# entry below is a permissive licence a dependency of wgpu / egui / winit carries; none is copyleft.
+# No GPL, LGPL, AGPL, EPL or MPL: any crate under them fails this gate.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+]
+confidence-threshold = 0.93
+unused-allowed-license = "allow"
+# One crate-scoped exception, not a global allowance; nothing else may use this licence.
+# - `unicode-ident` (via proc-macro2, a build-time dependency of serde's derive): Unicode's data
+#   tables under Unicode-3.0, permissive and OSI-approved. DXVKit Plus carries the same exception.
+# (egui's built-in fonts, `epaint_default_fonts` under OFL-1.1 / Ubuntu-font-1.0, were the second
+# exception from C1; since C3 egui is built without them and the apps draw with the system font,
+# read from the OS at run time: crates/glance-ui/src/fonts.rs.)
+exceptions = [
+    { name = "unicode-ident", allow = ["Unicode-3.0"] },
+]
+# Our own crates are unpublished (publish = false) and MIT.
+private = { ignore = true }
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+# Copyleft media stacks are never linked (Amrit's decision: no FFmpeg, libav, GStreamer or libmpv).
+deny = [
+    { name = "ffmpeg-next", reason = "links FFmpeg (LGPL/GPL)" },
+    { name = "ffmpeg-sys-next", reason = "links FFmpeg (LGPL/GPL)" },
+    { name = "ffmpeg-sys", reason = "links FFmpeg (LGPL/GPL)" },
+    { name = "ffmpeg-sys-the-third", reason = "links FFmpeg (LGPL/GPL)" },
+    { name = "ffmpeg-the-third", reason = "links FFmpeg (LGPL/GPL)" },
+    { name = "ac-ffmpeg", reason = "links FFmpeg (LGPL/GPL)" },
+    { name = "rsmpeg", reason = "links FFmpeg (LGPL/GPL)" },
+    { name = "video-rs", reason = "links FFmpeg (LGPL/GPL)" },
+    { name = "libmpv", reason = "LGPL/GPL media stack" },
+    { name = "libmpv2", reason = "LGPL/GPL media stack" },
+    { name = "libmpv-sys", reason = "LGPL/GPL media stack" },
+    { name = "libmpv2-sys", reason = "LGPL/GPL media stack" },
+    { name = "gstreamer", reason = "LGPL media stack" },
+    { name = "gstreamer-sys", reason = "LGPL media stack" },
+    { name = "gstreamer-video", reason = "LGPL media stack" },
+    { name = "gstreamer-app", reason = "LGPL media stack" },
+    { name = "symphonia", reason = "MPL-2.0" },
+    { name = "mp4parse", reason = "MPL-2.0" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# The git dependencies: glance-core (pinned by tag in Cargo.toml) and, through it, DXVKit Plus (both
+# Amrit's own, MIT).
+allow-git = ["https://github.com/AmritusG/glance-core", "https://github.com/AmritusG/DXVKit-Plus"]

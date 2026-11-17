@@ -1,83 +1,64 @@
 # GlEnc
 
-**GlEnc** is a native macOS encoder for Resolume VJ workflows. Drop in any
-source video and encode it to the formats Resolume and other realtime tools
-prefer — including byte-accurate Resolume **DXV3** output — with a queue-based
-GUI, per-job trim/crop/resize/rename, live preview, and audio pass-through.
+**GlEnc** is a native macOS encoder for Resolume VJ workflows. Drop in any source video and encode it to the
+formats Resolume and other realtime tools prefer, including Resolume **DXV3** output, with a queue-based window,
+per-job trim / crop / resize / rename, a live preview and audio pass-through.
 
-Version **1.4.0**. Requires **macOS 14 (Sonoma) or later**.
+Version **1.7.0**, rebuilt in Rust (egui + wgpu). Requires **macOS 14 (Sonoma) or later**. Versions up to 1.6.2 were
+Swift; their source is in this repository's history (tags `v1.1.0` … `v1.6.2`).
 
 ## Download
 
-Prefer a ready-to-run app over building from source? Download the signed, notarized macOS DMG from [glenc-releases](https://github.com/AmritusG/glenc-releases).
+Prefer a ready-to-run app over building from source? Download the signed, notarised macOS DMG from
+[glenc-releases](https://github.com/AmritusG/glenc-releases/releases/tag/v1.7.0).
 
 ## Formats
 
 | Family | Variants | Notes |
 |---|---|---|
-| **DXV3** | DXT1, DXT5, YCG6 (HQ), YG10 (HQ + alpha) | Encoded by [DXVKit](#license) (clean-room, MIT); GlEnc's own MOV writer (audio, >4 GB, NTSC rates) |
-| **HAP** | Hap1, Hap5, HapY, HapM (HAP + alpha) | From-scratch Snappy + HAP section writer |
+| **DXV3** | DXT1, DXT5, YCG6 (HQ), YG10 (HQ + alpha) | Byte-identical to GlEnc 1.6.2's output (from every source but HAP Q) |
+| **HAP** | Hap1, Hap5, HapY, HapM, HapA | Chunked or single, as 1.6.2 |
 | **ProRes** | 422, 422 HQ, LT, Proxy, 4444 | 4444 carries source alpha through |
-| **H.264 / HEVC** | — | VideoToolbox; rate-control, keyframe interval, profile; `.mp4`/`.mov` |
-| **MJPEG** | — | (codec scaffolding present) |
+| **H.264 / HEVC** | — | `.mp4` / `.mov` |
+| **Motion JPEG** | — | |
 
-Audio tracks are carried through to formats that support them. Source clips may
-themselves be DXV3, HAP, ProRes, H.264/HEVC, or MJPEG.
+Audio tracks are carried through to formats that support them. Sources may themselves be DXV, HAP, ProRes,
+H.264 / HEVC or Motion JPEG.
 
 ## Building
 
-GlEnc is a Swift Package (SwiftPM), pure Swift, no Xcode project required.
+A Cargo workspace; everything it needs is public:
 
-```bash
-swift build -c release        # build the library + app target
-swift run GlEnc               # run the app directly
+- [glance-core](https://github.com/AmritusG/glance-core) (MIT), the Glance family's shared core, pinned by tag;
+- [DXVKit Plus](https://github.com/AmritusG/DXVKit-Plus) (MIT), every decoder and encoder, through glance-core;
+- crates from crates.io, all permissive (MIT, Apache-2.0, BSD, Zlib, ISC), checked by `cargo deny check` (`deny.toml`).
+
+```sh
+cargo build --release            # target/release/GlEnc (the app) and target/release/glenc-cli
+cargo run --release --bin GlEnc  # run the app unbundled
 ```
 
-Or use the bundled scripts to produce a proper `.app` bundle:
+Rust 1.95 or newer. No FFmpeg, libav or GStreamer.
 
-```bash
-scripts/build.sh              # builds ./GlEnc.app (unsigned)
-scripts/run.sh                # build + launch
+### App bundle and release builds (your own credentials)
+
+`tools/package/` builds, signs, notarises and packs the app from `crates/glenc/bundle/app.conf`
+(`tools/package/README.md` says what each step does):
+
+```sh
+tools/package/release.sh crates/glenc/bundle/app.conf
 ```
 
-> **Cmd-Tab icon note:** macOS only renders a custom app icon at Cmd-Tab for
-> bundles under `/Applications`. `scripts/install.sh` copies the build there and
-> re-registers it. Running from the repo is fine for development; the icon just
-> shows a placeholder at Cmd-Tab.
+Signing and notarisation need **your own** Apple Developer credentials; none are in this repository. Set
+`SIGN_IDENTITY` (or leave `auto`: the first "Developer ID Application" identity in your keychain) and
+`NOTARY_PROFILE` (a notarytool keychain profile you store once with `xcrun notarytool store-credentials <name>`)
+in `app.conf`, and change `BUNDLE_ID` if you ship your own build.
 
-### Release builds (signing & notarization — you supply your own credentials)
+## This repository
 
-The release pipeline is `build.sh` → `sign.sh` → `notarize.sh` → `make-dmg.sh`.
-These require **your own** Apple Developer credentials — none are bundled:
-
-- Export your Developer ID signing identity before signing/DMG steps:
-  ```bash
-  export SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
-  ```
-  (`security find-identity -v -p codesigning` lists yours.)
-- `notarize.sh` uses a notarytool **keychain profile** you create once with
-  `xcrun notarytool store-credentials <profile-name>` (your Apple ID, team ID,
-  and an app-specific password). Point the script at your profile name.
-
-## Testing
-
-The test suite and reference corpus are maintained in the private development
-repository and are not published in this mirror.
+A public mirror of GlEnc's source: the code and the build kit only. The tests, their media and the development
+notes stay in the private working repository.
 
 ## License
 
-GlEnc's own source is released under the **MIT License** (see [`LICENSE`](./LICENSE)).
-
-Some files carry other terms, declared per-file via `SPDX-License-Identifier`
-headers:
-
-- The Snappy compressor is **BSD-3-Clause**.
-- Other ported / clean-room files retain upstream **MIT** attribution.
-
-DXV is encoded and read by **DXVKit**, a clean-room DXV codec (MIT); HAP sources
-are decoded and previews played by **GlanceCore / GlancePlayback** (MIT). Nothing
-in GlEnc is LGPL or GPL.
-
-Full upstream attribution is in
-[`THIRD-PARTY-NOTICES.md`](./THIRD-PARTY-NOTICES.md); license texts are in
-[`LICENSES/`](./LICENSES).
+MIT (`LICENSE`), Copyright (c) 2026 Amrit Rosell.

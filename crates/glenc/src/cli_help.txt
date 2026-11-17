@@ -1,0 +1,56 @@
+OVERVIEW: Headless DXV/HAP (and ProRes/H.264/HEVC/MJPEG) encoder over
+GlEncCore.
+
+Encodes one input video to one output file. DXV (DXD3) and HAP are
+the priority — the formats ffmpeg cannot produce. Validate output
+independently (ffprobe FourCC + `dxvtool check` / an ffmpeg decode);
+do not trust this tool's own exit code as proof of correctness.
+
+Codec values:
+  DXV3:  dxt1  dxt5  ycg6  yg10
+  HAP:   hap1  hap5  hapy  hapa  hapm
+  ProRes: prores422  prores422hq  prores422lt  prores422proxy  prores4444
+  Other:  h264  hevc  mjpeg
+
+USAGE: glenc-cli [<options>] <input> <output>
+
+ARGUMENTS:
+  <input>                 Input video path (any AVFoundation-readable
+                          container, or a DXV3 .mov).
+  <output>                Output file path.
+
+OPTIONS:
+  -c, --codec <codec>     Codec/variant. See the discussion above for the full
+                          list. (default: dxt1)
+  --container <container> Container: mov or mp4 (mp4 only valid for h264/hevc).
+                          (default: mov)
+  --width <width>         Output width (with --height, forces a resize to WxH).
+  --height <height>       Output height (with --width, forces a resize to WxH).
+  --resize-quality <resize-quality>
+                          Resize filter: auto, nearest, bilinear, lanczos.
+                          (default: auto)
+  --aspect <aspect>       Aspect handling on resize: letterbox or
+                          distortToFill. (default: letterbox)
+  --crop <crop>           Crop rect in source pixels as x:y:w:h (top-left
+                          origin).
+  --trim <trim>           Trim to source frames [start, end) as start:end.
+  --audio/--no-audio      Pass through the source audio track (default: on).
+                          (default: --audio)
+  --chunks <chunks>       HAP chunked-section count (hap1/hap5/hapy/hapa/hapm).
+                          1 = single section (default); 2-64 = multi-chunk
+                          (Hap1 0xCB / Hap5 0xCE / HapY 0xCF / HapA 0xC1; HapM
+                          0x0D wrapping 0xCF color + 0xC1 alpha). (default: 1)
+  --alpha-type <alpha-type>
+                          What a DXV source's colour is (Resolume Arena's
+                          "Alpha Type"): premultiplied (default) or straight. A
+                          DXV file doesn't say; premultiplied colour is
+                          un-premultiplied on read. Ignored for other sources
+                          (HAP / ProRes / HEVC alpha are read as their format
+                          states). (default: premultiplied)
+  --writer-version <writer-version>
+                          Encoding-software string stamped into udta/©swr.
+                          (default: glenc-cli 1.0.0)
+  --verbose               Print resolved settings before encoding.
+  --version               Show the version.
+  -h, --help              Show help information.
+

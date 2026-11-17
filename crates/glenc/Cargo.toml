@@ -1,0 +1,40 @@
+[package]
+name = "glenc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "GlEnc, the queue-based encoder for Resolume workflows (DXV3, HAP, ProRes, H.264, HEVC, Motion JPEG), on glance-core."
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+# Swift GlEnc's executable name (Info.plist: CFBundleExecutable = GlEnc).
+[[bin]]
+name = "GlEnc"
+path = "src/main.rs"
+
+[[bin]]
+name = "glenc-cli"
+path = "src/bin/glenc-cli.rs"
+
+[dependencies]
+glance-encode = { workspace = true }
+glance-media = { workspace = true }
+glance-settings = { workspace = true }
+glance-ui = { workspace = true }
+glance-gpu = { workspace = true }
+glance-playback = { workspace = true }
+glance-platform = { workspace = true }
+egui = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+png = "0.18"

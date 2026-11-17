@@ -19,22 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
---------------------------------------------------------------------------------
-
-GlEnc's own source is licensed under the MIT License above. Portions of the
-source are derived from third-party projects and carry their own terms:
-
-  * The DXV3 LZ/opcode/cgo writers
-    (Sources/GlEncCore/DXVLZWriter.swift, DXVHQOpcodeWriter.swift,
-    DXVHQCgoWriter.swift) are Swift ports/derivations of FFmpeg's
-    libavcodec/dxvenc.c and dxv.c and are licensed under
-    LGPL-2.1-or-later (see LICENSES/LGPL-2.1.txt).
-
-  * Sources/GlEncCore/SnappyCompressor.swift is licensed under the
-    3-Clause BSD License (see LICENSES/BSD-3-Clause.txt).
-
-  * Other ported/clean-room files carry upstream MIT attribution.
-
-Per-file licensing is declared via SPDX-License-Identifier headers. Full
-upstream attribution is catalogued in THIRD-PARTY-NOTICES.md.

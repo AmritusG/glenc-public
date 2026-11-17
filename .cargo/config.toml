@@ -1,0 +1,10 @@
+# Deployment targets for every binary built from this workspace (a library cannot set them for its
+# dependents, so the apps' repos carry the same lines).
+# - macOS 14.0: the Swift apps' floor (parity). Without it rustc links x86_64 binaries for 10.12,
+#   which reference @rpath/libswiftCoreMedia.dylib through DXVKit Plus's Apple island and do not
+#   load (DXVKit Plus W2, measured; anything >= 10.14.4 loads).
+# - iOS 15.0: a placeholder until GlancEhr sets its own; with none set, an iOS link fails on
+#   ___chkstk_darwin (DXVKit Plus W2).
+[env]
+MACOSX_DEPLOYMENT_TARGET = "14.0"
+IPHONEOS_DEPLOYMENT_TARGET = "15.0"

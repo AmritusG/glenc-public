@@ -1,20 +1,4 @@
-.build/
-.swiftpm/
-*.app
-*.dmg
-*.zip
-*.xcodeproj/
-*.xcworkspace/
-DerivedData/
+/target
+/.ref
 .DS_Store
-/tmp/
-*.log
-.claude/*
-!.claude/skills/
-.claude/skills/*
-!.claude/skills/mint-test-media/
-**/.*.crate-meta.json
-
-# Reproducible chunked-HAP fixtures (mint locally via glenc-cli --chunks)
-/fixtures/chunked/
-*.dmg.sha256
+__pycache__/

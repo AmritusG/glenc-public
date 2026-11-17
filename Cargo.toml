@@ -1,0 +1,46 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+# Swift GlEnc's series: 1.6.2 was the last Swift release; the Rust app is 1.7.0 (glance-core roadmap §6 step 4).
+version = "1.7.0"
+edition = "2024"
+# glance-core's floor (let-chains, edition 2024).
+rust-version = "1.95"
+license = "MIT"
+authors = ["Amrit Rosell"]
+repository = "https://github.com/AmritusG/glenc-rs"
+publish = false
+
+[workspace.dependencies]
+# glance-core, pinned by tag (all crates at the same tag; glance-core docs/00-ROADMAP.md §4).
+glance-encode = { git = "https://github.com/AmritusG/glance-core", tag = "v0.5.0" }
+glance-media = { git = "https://github.com/AmritusG/glance-core", tag = "v0.5.0" }
+glance-settings = { git = "https://github.com/AmritusG/glance-core", tag = "v0.5.0" }
+glance-playback = { git = "https://github.com/AmritusG/glance-core", tag = "v0.5.0" }
+glance-gpu = { git = "https://github.com/AmritusG/glance-core", tag = "v0.5.0" }
+glance-ui = { git = "https://github.com/AmritusG/glance-core", tag = "v0.5.0" }
+glance-platform = { git = "https://github.com/AmritusG/glance-core", tag = "v0.5.0" }
+# The core's egui (one version per app: the core's).
+egui = { version = "0.36.2", default-features = false }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+
+# The core's never-crash rules.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+todo = "deny"
+unreachable = "deny"
+dbg_macro = "warn"
+
+# The released app carries no debug info (the kit strips the debug map with `strip -S`; cargo's own strip needs
+# rust-objcopy, which fails on rustup 1.100); the symbol table stays, so crash reports keep function names.
+[profile.release]
+debug = false
