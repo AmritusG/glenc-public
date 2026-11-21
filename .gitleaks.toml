@@ -1,0 +1,82 @@
+# gitleaks: its own rules, and the path guard's rules a second time (tools/path-guard.sh is the
+# authority and knows more: this machine's own names, and the private names it keeps as SHA-256).
+# The allow lists hold made-up names only (the guard's GENERIC lists); a real name never goes on
+# one. A hit is fixed at the source.
+title = "Glance family: secrets and build-machine paths"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "home-path"
+description = "A home path of a build machine"
+regex = '''/Users/[A-Za-z0-9][A-Za-z0-9._-]*'''
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = ['''(?i)^/Users/(?:shared|x|a|u|me|you|name|user|test|nobody-here|resolume|runner)$''']
+
+[[rules]]
+id = "home-path-windows"
+description = "A Windows home path of a build machine"
+regex = '''[A-Za-z]:\\+Users\\+[A-Za-z0-9][A-Za-z0-9._-]*'''
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = ['''(?i)\\(?:shared|x|a|u|me|you|name|user|test|nobody-here|resolume|runner|public|default|runneradmin)$''']
+
+[[rules]]
+id = "home-path-as-folder-name"
+description = "A home path made into a folder name"
+regex = '''-Users-[A-Za-z0-9]+-'''
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = ['''(?i)^-Users-(?:shared|x|a|u|me|you|name|user|test|resolume|runner)-$''']
+
+[[rules]]
+id = "home-path-linux"
+description = "A Linux home path of a build machine"
+regex = '''(?:^|[\s"'=:(\[])/home/([a-z_][a-z0-9_.-]*)/'''
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = ['''/home/(?:runner|user|me|you|name|x|test)/$''']
+
+# The capture groups below name the part gitleaks judges: its default allow list lets a whole
+# /var/…, /tmp/… or /home/… path through, a bare folder name it does not.
+[[rules]]
+id = "temporary-path"
+description = "A per-user temporary folder"
+regex = '''/var/folders/[A-Za-z0-9_+]{2}/([A-Za-z0-9_+]{6,})'''
+
+[[rules]]
+id = "scratch-path"
+description = "A session scratch folder"
+regex = '''/(?:private/)?tmp/(claude-[0-9]+)'''
+
+[[rules]]
+id = "volume"
+description = "A volume that is not one of the made-up names"
+regex = '''/Volumes/[^/\s"'`<>()\[\]{}*$\\,;:|#?&=]+'''
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = [
+    '''^/Volumes/(?:A|D|M|X|Y|XY|Mo|My|Fix|Fixture|Here|Here2|There|Gone|Other|Out|Show|Clips|ClipDrive|ClipDriveX|Data|Media|VJ|NoSuchVolume|NotMounted|Macintosh|Recovery|Preboot|\.timemachine|My%20Clips)[.…]*$''',
+    '''^/Volumes/(?:Glance|CueGlance|GlEnc|MaCrate|GlancEhr)[A-Za-z0-9._%-]*$''',
+    '''^/Volumes/[^A-Za-z0-9]*$''',
+]
+
+[[rules]]
+id = "host-name"
+description = "A machine's host name"
+regex = '''(?:^|[^A-Za-z0-9._-])[A-Za-z][A-Za-z0-9-]*\.lan(?:[^\w(]|$)|\b[A-Za-z0-9-]*(?:MacBook|iMac|Mac-?mini|Mac-?Studio|Mac-?Pro)[A-Za-z0-9-]*\.(?:local|lan|home)\b|\b[A-Za-z0-9]+s-(?:MacBook|iMac|Mac)(?:-[A-Za-z0-9]+)*\b|\b[A-Z][a-z]+['’]s (?:MacBook|iMac|Mac (?:mini|Studio|Pro))\b'''
+
+[[rules]]
+id = "session-link"
+description = "A claude.ai session link or session id"
+regex = '''claude\.ai/(?:code|chat|share|public)/[A-Za-z0-9_-]{8,}|\bsession_01[A-Za-z0-9]{20,}'''
+
+[[rules]]
+id = "listing-owner"
+description = "The owner column of ls -l output"
+regex = '''(?m)^[-dlbcps][-rwxsStT]{9}[@+.]?\s+\d+\s+[A-Za-z_][\w.-]*\s+[A-Za-z_][\w.-]*\s+\d+\s'''
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = ['''\s\d+\s+(?:root|runner|user)\s''']

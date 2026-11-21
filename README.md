@@ -59,6 +59,15 @@ in `app.conf`, and change `BUNDLE_ID` if you ship your own build.
 A public mirror of GlEnc's source: the code and the build kit only. The tests, their media and the development
 notes stay in the private working repository.
 
+### Rules
+
+No build-machine path or account name ever enters a public repo or a released binary: no /Users/<name>, no ~/ expanded, no /private/var/folders, no /Volumes/<private>, no host names, no session URLs. Logs, test output and data files are scrubbed or kept out of git. This is enforced by the pre-push hook, the CI path check and the kit's binary check; none of them may be bypassed, disabled or weakened (no --no-verify, no allow-list for a real path). A hit is fixed at the source, never waved through.
+
+The machinery is `tools/path-guard.sh` (the Glance family's guard, kept in
+[glance-core](https://github.com/AmritusG/glance-core) and copied here unchanged): the pre-push hook
+(`tools/path-guard.sh install`, once per clone), a gate (`tools/path-guard.sh check`) and the `path-guard` CI job, a
+required check on `main`. `tools/push-main.sh` is how a commit reaches `main` (through `guard/<sha>` and that job).
+
 ## License
 
 MIT (`LICENSE`), Copyright (c) 2026 Amrit Rosell.

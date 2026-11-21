@@ -1,0 +1,46 @@
+# The path guard, on every push and pull request: no build-machine path or account name in any
+# commit, file, file name, tag message or ref name of this repository (tools/path-guard.sh), and
+# gitleaks with the same rules (.gitleaks.toml).
+#
+# The guard is the family's, kept in glance-core (tools/path-guard.sh, .gitleaks.toml); the copies here
+# must be that file, byte for byte (glance-core's tools/path-guard-setup.sh copies them).
+#
+# "path-guard" is a required status check on main, admins included: a commit reaches main only
+# after this job passed on that commit. tools/push-main.sh pushes it to guard/<sha> first, waits
+# for this job, then pushes main. The job is not to be skipped, made optional or weakened; a hit is
+# fixed at the source.
+name: path-guard
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  path-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: the guard is glance-core's, unchanged
+        run: |
+          git clone --quiet --depth 1 https://github.com/AmritusG/glance-core "$RUNNER_TEMP/glance-core"
+          for f in tools/path-guard.sh .gitleaks.toml; do
+            cmp "$f" "$RUNNER_TEMP/glance-core/$f" || { echo "$f is not glance-core's copy: run glance-core's tools/path-guard-setup.sh and commit the result"; exit 1; }
+          done
+      - name: the guard tests itself
+        run: tools/path-guard.sh selftest
+      - name: every ref - commits, files, file names, tag messages, ref names
+        run: tools/path-guard.sh history
+      - name: the tree of this commit
+        run: tools/path-guard.sh tree HEAD
+      - name: gitleaks, the same rules
+        run: |
+          v=8.30.1
+          curl -fsSL -o "$RUNNER_TEMP/gitleaks.tgz" "https://github.com/gitleaks/gitleaks/releases/download/v$v/gitleaks_${v}_linux_x64.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --no-banner --redact --config .gitleaks.toml .
