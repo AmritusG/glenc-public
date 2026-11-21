@@ -82,7 +82,8 @@ my @MACHINE;    # [label, compiled regex]
 }
 
 my $MASK = $ENV{CI} ? 1 : 0;    # a public log never repeats what it found
-my ( @hits, %tok_cache );
+my ( @hits, %tok_cache, %by_rule );
+my $SHOWN = 60;    # lines printed; the count is always of all hits
 my ( $n_objects, $n_bytes ) = ( 0, 0 );
 
 sub hit {
@@ -90,6 +91,7 @@ sub hit {
     $text = substr( $text, 0, 120 );
     $text =~ s/[^\x20-\x7e]/?/g;
     $text = substr( $text, 0, 3 ) . '...(' . length($text) . ' characters)' if $MASK;
+    $by_rule{$rule}++;
     push @hits, sprintf( '%s:%s: [%s] %s', $label, $line, $rule, $text );
 }
 
@@ -350,7 +352,9 @@ sub selftest {
 sub finish {
     my ($what) = @_;
     if (@hits) {
-        print "$_\n" for @hits;
+        my $last = $#hits < $SHOWN ? $#hits : $SHOWN - 1;
+        print "$_\n" for @hits[ 0 .. $last ];
+        printf "... and %d more. All hits by rule: %s\n", @hits - $SHOWN, join( ', ', map { "$_ $by_rule{$_}" } sort keys %by_rule ) if @hits > $SHOWN;
         printf "path-guard: %d hit%s in %s (%d objects, %d bytes). Fix each at its source; nothing is waved through.\n", scalar @hits, @hits == 1 ? '' : 's', $what,
             $n_objects, $n_bytes;
         exit 1;
